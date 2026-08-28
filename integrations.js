@@ -25,14 +25,15 @@ const MARK = `:${PORT}/agent`;
 
 /* async + `|| true`：后台跑、连不上也静默失败 ——
  * 桌宠没开的时候绝不能拖住用户的会话 */
-const HOOK_CMD =
-  `curl -s -m 2 -X POST http://127.0.0.1:${PORT}/agent ` +
+/* ?from= 把来源写死在 URL 里，桌宠据此区分是谁在干活 */
+const hookCmd = from =>
+  `curl -s -m 2 -X POST http://127.0.0.1:${PORT}/agent?from=${from} ` +
   `-H 'Content-Type: application/json' --data-binary @- >/dev/null 2>&1 || true`;
 
 /* Windows 没有 curl 的老机器用 PowerShell 兜底 */
-const HOOK_CMD_PS =
+const hookCmdPs = from =>
   `try { $i = [Console]::In.ReadToEnd(); ` +
-  `Invoke-RestMethod -Uri 'http://127.0.0.1:${PORT}/agent' -Method Post ` +
+  `Invoke-RestMethod -Uri 'http://127.0.0.1:${PORT}/agent?from=${from}' -Method Post ` +
   `-ContentType 'application/json' -Body $i -TimeoutSec 2 | Out-Null } catch {}`;
 
 const EVENTS = [
@@ -85,10 +86,10 @@ function backup(file) {
 
 /* ---------------- Claude Code ---------------- */
 
-const hookCommand = () => (process.platform === 'win32' ? HOOK_CMD_PS : HOOK_CMD);
+const hookCommand = from => (process.platform === 'win32' ? hookCmdPs(from) : hookCmd(from));
 
 function hookEntry() {
-  const h = { type: 'command', command: hookCommand(), async: true, timeout: 5 };
+  const h = { type: 'command', command: hookCommand('claude'), async: true, timeout: 5 };
   if (process.platform === 'win32') h.shell = 'powershell';
   return { hooks: [h] };
 }
@@ -194,7 +195,7 @@ function claudeUninstall() {
 const CODEX_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PermissionRequest', 'Stop', 'SessionEnd'];
 
 function codexHookEntry() {
-  const h = { type: 'command', command: hookCommand(), timeout: 3 };  /* 不能加 async */
+  const h = { type: 'command', command: hookCommand('codex'), timeout: 3 };  /* 不能加 async */
   return { matcher: '', hooks: [h] };
 }
 
@@ -252,7 +253,7 @@ function writeWrapper(original) {
       '@echo off\r\n' +
       'rem 由 emotion-ball-desktop 生成，卸载时会删除\r\n' +
       fwd +
-      `powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:${PORT}/agent' ` +
+      `powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:${PORT}/agent?from=codex' ` +
       `-Method Post -ContentType 'application/json' -Body '%~1' -TimeoutSec 2 | Out-Null } catch {}"\r\n` +
       'exit /b 0\r\n');
     return p;
@@ -278,7 +279,7 @@ case "$PAYLOAD" in
 esac
 
 # 桌宠没开时静默失败，绝不拖住 Codex
-curl -s -m 2 -X POST http://127.0.0.1:${PORT}/agent \\
+curl -s -m 2 -X POST http://127.0.0.1:${PORT}/agent?from=codex \\
   -H 'Content-Type: application/json' -d "$PAYLOAD" >/dev/null 2>&1 || true
 exit 0
 `, { mode: 0o755 });

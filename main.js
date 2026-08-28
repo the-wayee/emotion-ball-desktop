@@ -96,6 +96,8 @@ let lastAiError = null;                  /* 最近一次失败原因，设置界
 let agentBusy = false;                   /* 任务进行中：一直保持忙碌表情 */
 let agentBusyUntil = 0;                  /* 兜底：结束事件没来也不会永远卡在忙碌 */
 let agentSeen = null;                    /* 最近一次事件名，/state 里能看到 */
+let agentSource = 'unknown';             /* claude | codex，安装时写进 URL 的 */
+let agentWorkId = '16';                  /* 本次任务的干活表情，整段保持不变 */
 let lastCursorMove = Date.now();
 let lastCursorPt = { x: -1, y: -1 };
 const lastPick = new Map();              /* 每个池上次抽中的下标，避免连续重复 */
@@ -359,6 +361,7 @@ function react(kind) {
   if (now < sulkUntil) return;
 
   if (kind === 'hover') {
+    if (agentBusy) return;                     /* 干活时鼠标扫过不搭理 */
     /* 冷却 + 不打断正在说的话：鼠标扫来扫去不该让它一直叨叨 */
     if (now < hoverNext) return;
     if (tempBackAt && now < tempBackAt) return;
@@ -371,6 +374,17 @@ function react(kind) {
 
   wake();
   stopWalk();
+
+  /* 代理正在干活：走另一套台词，而且不解除忙碌 ——
+   * 说完由 tickBehaviour 收回到干活表情。也不进闹脾气，
+   * 它在干活不是在赌气 */
+  if (agentBusy) {
+    if (now - lastClickAt > 6000) clickN = 0;
+    clickN += 1;
+    lastClickAt = now;
+    say(agentLine(clickN <= 3 ? 'busyPoke' : 'busyAnnoyed'));
+    return;
+  }
 
   if (kind === 'delight') { say(pick(REACT.delight, 'delight')); return; }
 
@@ -425,10 +439,11 @@ function tickBehaviour(now) {
       agentBusy = false;
       setEmotion(IDLE_ID);
     } else {
-      /* 忙碌期间插播的「出错」「等你回话」播完，回到忙碌表情而不是待机 */
+      /* 忙碌期间插播的「出错」「等你回话」「别戳我」播完，
+       * 回到本次任务的干活表情而不是待机 */
       if (tempBackAt && now >= tempBackAt) {
         tempBackAt = 0;
-        setEmotion(REACT.agent.working.id);
+        setEmotion(agentWorkId);
       }
       return;
     }
@@ -563,15 +578,27 @@ const AGENT_MAP = {
 
 const AGENT_BUSY_MAX = 30 * 60 * 1000;   /* 忙碌状态的最长保持时间 */
 
+/** 抽一条代理台词，并把 {who} 换成来源名字 */
+function agentLine(key) {
+  const line = pick(REACT.agent[key], 'agent:' + key);
+  if (!line) return null;
+  const who = REACT.agent.names[agentSource] || REACT.agent.names.unknown;
+  return {
+    id: line.id,
+    text: line.text ? line.text.replace(/\{who\}/g, who) : null
+  };
+}
+
 /** @returns {string|null} 实际采用的动作名 */
-function agentEvent(payload) {
+function agentEvent(payload, source) {
   const raw = payload && (payload.hook_event_name || payload.type || payload.event);
   if (!raw) return null;
   agentSeen = raw;
+  if (source) agentSource = source;
   const key = AGENT_MAP[raw];
   if (!key) return null;
 
-  const line = REACT.agent[key];
+  const line = agentLine(key);
   if (!line) return null;
 
   wake(true);
@@ -579,9 +606,12 @@ function agentEvent(payload) {
   clearSulk();
 
   if (key === 'working') {
-    /* 任务开始：一直保持忙碌，直到收到结束事件（或超时兜底） */
+    /* 任务开始：一直保持忙碌，直到收到结束事件（或超时兜底）。
+     * 干活表情整段任务不变 —— 中途插播的台词播完要回到它，
+     * 所以这里记下来，不能每次现抽 */
     agentBusy = true;
     agentBusyUntil = Date.now() + AGENT_BUSY_MAX;
+    agentWorkId = line.id;
     setEmotion(line.id, 0, line.text);
     return key;
   }
@@ -770,7 +800,7 @@ function startApi() {
         height: walk ? Math.round(walk.h) : 0,
         autoBehave: autoBehave,
         clicks: clickN,
-        agent: { busy: agentBusy, lastEvent: agentSeen },
+        agent: { busy: agentBusy, lastEvent: agentSeen, source: agentSource },
         sulkMsLeft: Math.max(0, sulkUntil - Date.now()),
         ai: {
           ready: settings.isReady(),
@@ -797,12 +827,18 @@ function startApi() {
       return;
     }
     /* 编码代理事件：Claude Code hook / Codex notify 直接把各自的 JSON 灌进来 */
-    if (req.method === 'POST' && req.url === '/agent') {
+    if (req.method === 'POST' && req.url.split('?')[0] === '/agent') {
+      /* 来源写在 URL 里（安装时就定死），不靠猜 payload ——
+       * Claude Code 与 Codex 的字段大同小异，猜不可靠 */
+      const q = req.url.split('?')[1] || '';
+      const from = (q.match(/(?:^|&)from=([a-z]+)/) || [])[1];
       readBody(req, body => {
         let o = null;
         try { o = JSON.parse(body || '{}'); } catch (e) { /* 非 JSON 就当没事件 */ }
-        const acted = o ? agentEvent(o) : null;
-        res.end(JSON.stringify({ ok: !!acted, action: acted, seen: agentSeen }));
+        const acted = o ? agentEvent(o, from) : null;
+        res.end(JSON.stringify({
+          ok: !!acted, action: acted, seen: agentSeen, source: agentSource
+        }));
       });
       return;
     }

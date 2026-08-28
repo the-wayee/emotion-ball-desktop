@@ -85,15 +85,72 @@ module.exports = {
   ],
 
   /* 编码代理（Claude Code / Codex）的任务状态。
-   * 由 POST /agent 驱动，事件名见 main.js 的 AGENT_MAP。
-   * busy 类事件会一直保持到收到结束事件为止。 */
+   * 由 POST /agent?from=claude|codex 驱动，事件名见 main.js 的 AGENT_MAP。
+   *
+   * {who} 会被替换成来源的名字。来源是安装时写进 URL 的，不靠猜 payload ——
+   * 两边的字段大同小异，猜不可靠。
+   * 每档都是数组，随机抽且不连续重复。留一部分不带 {who} 的，
+   * 免得每句都在报菜名。 */
   agent: {
-    start:   { id: '01', text: '开工了' },
-    working: { id: '32', text: '接到活了,干起来' },
-    waiting: { id: '35', text: '卡住了,等你回话' },
-    done:    { id: '33', text: '干完了' },
-    failed:  { id: '34', text: '出岔子了' },
-    end:     { id: '00', text: null }
+    names: { claude: 'Claude', codex: 'Codex', unknown: '它' },
+
+    start: [
+      { id: '01', text: '{who} 上线了' },
+      { id: '05', text: '{who} 开机中…' },
+      { id: '03', text: '来了来了' }
+    ],
+
+    /* 干活时的常驻表情，进任务时抽一个，整段任务保持不变 */
+    working: [
+      { id: '16', text: '{who} 开始干活了' },
+      { id: '16', text: '认真脸.jpg' },
+      { id: '30', text: '{who} 在想了' },
+      { id: '32', text: '{who} 忙起来了' },
+      { id: '40', text: '{who} 翻资料呢' },
+      { id: '16', text: '我帮你盯着' }
+    ],
+
+    waiting: [
+      { id: '35', text: '{who} 卡住了,等你回话' },
+      { id: '35', text: '{who} 要你点头' },
+      { id: '11', text: '你人呢?{who} 等着呢' },
+      { id: '35', text: '有个东西要你批一下' }
+    ],
+
+    done: [
+      { id: '33', text: '{who} 干完了' },
+      { id: '33', text: '搞定,来验收' },
+      { id: '19', text: '{who} 说完事了' },
+      { id: '10', text: '收工!' },
+      { id: '33', text: '活干完了,人呢' }
+    ],
+
+    failed: [
+      { id: '34', text: '{who} 那边出岔子了' },
+      { id: '34', text: '报错了' },
+      { id: '17', text: '哎哟,翻车了' },
+      { id: '18', text: '{who} 又踩坑了' }
+    ],
+
+    end: [
+      { id: '00', text: null }
+    ],
+
+    /* 干活时被戳。1~3 下还算客气，4 下以上就烦了。
+     * 注意这一档不会解除忙碌状态 —— 说完还回到干活表情 */
+    busyPoke: [
+      { id: '16', text: '忙着呢' },
+      { id: '11', text: '干嘛,正干活' },
+      { id: '32', text: '等会儿,{who} 还没完' },
+      { id: '16', text: '别打岔' },
+      { id: '35', text: '有事等它跑完' }
+    ],
+    busyAnnoyed: [
+      { id: '21', text: '说了忙着呢!' },
+      { id: '17', text: '你再戳我就出 bug 了' },
+      { id: '18', text: '很闲是吧' },
+      { id: '21', text: '干活呢!别戳!' }
+    ]
   },
 
   /* 双击撒花 */

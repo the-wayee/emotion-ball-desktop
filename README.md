@@ -301,20 +301,28 @@ curl -X POST http://127.0.0.1:17817/settings # 打开设置窗口
 
 两边都把各自的事件 JSON 原样 POST 到 `/agent`,桌宠自己翻译:
 
-| 事件 | 表情 | 台词 |
+| 事件 | 表情 | 台词(每档多条,随机不重复) |
 |---|---|---|
-| `SessionStart` | `01` 唤醒 | 开工了 |
-| `UserPromptSubmit` | `32` 处理中忙碌 | 接到活了,干起来 |
-| `Notification` / `PermissionRequest` | `35` 等待输入 | 卡住了,等你回话 |
-| `PostToolUseFailure` | `34` 出错 | 出岔子了 |
-| `Stop` / Codex `agent-turn-complete` | `33` 任务完成 | 干完了 |
-| `SessionEnd` | `00` 睡眠 | — |
+| `SessionStart` | 唤醒 / 加载 | 「{who} 上线了」「来了来了」 |
+| `UserPromptSubmit` | **专注 / 思考 / 检索** | 「{who} 开始干活了」「认真脸.jpg」「我帮你盯着」 |
+| `Notification` / `PermissionRequest` | 等待输入 | 「{who} 卡住了,等你回话」「你人呢?{who} 等着呢」 |
+| `PostToolUseFailure` | 出错 / 慌张 | 「{who} 那边出岔子了」「哎哟,翻车了」 |
+| `Stop` / Codex `agent-turn-complete` | 任务完成 | 「{who} 干完了」「搞定,来验收」「收工!」 |
+| `SessionEnd` | 睡眠 | — |
 
-台词在 [reactions.js](reactions.js) 的 `agent` 段,随便改。
+`{who}` 会替换成 **Claude** 或 **Codex** —— 来源是安装时写进 URL 的
+(`/agent?from=claude`),不靠猜 payload:两边字段大同小异,猜不可靠。
 
-**任务进行中会一直保持忙碌表情**:不散步、不自发换表情、DeepSeek 也不插嘴。
-中途插播的「出错」「等你回话」播完会**回到忙碌**而不是待机 —— 任务还在跑。
-结束事件没送达时有 30 分钟兜底,不会永远卡住。
+台词全在 [reactions.js](reactions.js) 的 `agent` 段,随便改。
+
+**任务进行中**:
+
+- 保持一个**认真表情**(专注 / 思考中 / 检索资料,进任务时抽一个,整段不变);
+- 不散步、不自发换表情、DeepSeek 也不插嘴、鼠标扫过也不搭理;
+- 中途插播的「出错」「等你回话」播完**回到那个干活表情**,不是待机 —— 任务还在跑;
+- **这时候戳它会不耐烦**:1~3 下「忙着呢」「别打岔」,4 下起「说了忙着呢!」
+  「你再戳我就出 bug 了」。但不会进闹脾气冷却 —— 它在干活,不是在赌气;
+- 结束事件没送达时有 30 分钟兜底,不会永远卡住。
 
 ### 怎么接
 

@@ -64,12 +64,30 @@ const RULES = [
     'word', 'pages', 'wps', 'onenote', 'evernote', 'logseq', 'anytype'
   ]],
   ['mail', '收邮件', ['mail', 'spark', 'outlook', 'airmail', '邮件', 'foxmail']],
+  ['files', '翻文件', [
+    'finder', '访达', 'explorer', '资源管理器', 'path finder', 'forklift',
+    'commander one', 'transmit', 'cyberduck', '压缩', 'keka', 'the unarchiver'
+  ]],
   ['browsing', '逛网页', [
     'safari', 'chrome', 'arc', 'edge', 'firefox', 'brave', 'opera', 'vivaldi',
     'orion', 'zen browser'
   ]],
   ['ai', '和 AI 聊天', ['chatgpt', 'claude', 'codex', 'gemini', 'perplexity', 'copilot']]
 ];
+
+/* 最近用过的应用（MRU）—— 每次采样看到新的前台应用就往前挪。
+ * 比"当前跑着哪些进程"有意义得多：进程列表是启动顺序，跟用户在干嘛无关。
+ * 上限压到 5 个，塞进提示词里也就十几个 token。 */
+const MRU_MAX = 5;
+const mru = [];
+
+function noteApp(name) {
+  if (!name) return;
+  const i = mru.indexOf(name);
+  if (i >= 0) mru.splice(i, 1);
+  mru.unshift(name);
+  if (mru.length > MRU_MAX) mru.pop();
+}
 
 /* 一堆 Helper、后台服务和系统进程，分类时全部忽略 */
 const NOISE = /helper|renderer|gpu|agent|daemon|service|svr|crashpad|updater|plugin|networking|webkit|xpc|notification|extension|appex|host$|^system|^runtime/i;
@@ -100,6 +118,9 @@ async function snapshot(displays) {
   const apps = (raw.apps || []).filter(a => a && !NOISE.test(a));
   const front = classify(raw.app);
 
+  /* 只有真正切到前台才计入 MRU；self 时 raw.app 是回忆值，重复记会打乱次序 */
+  if (!raw.self) noteApp(raw.app);
+
   /* 前台认不出来时，看看后台有没有跑着能认出来的（游戏 / 播放器常挂后台） */
   let hinted = null;
   if (!front) {
@@ -115,8 +136,10 @@ async function snapshot(displays) {
     self: !!raw.self,          /* 当前前台就是桌宠自己，app 是记住的上一个 */
     key: cat.key,
     label: cat.label,
-    /* 只挑分类命中的，避免把一整屏进程名发出去 */
-    alsoRunning: apps.filter(a => classify(a)).slice(0, 8),
+    /* 发给模型的只有这一小串：最近用过的应用，去掉当前这个（已经单独说了） */
+    recentApps: mru.filter(a => a !== raw.app).slice(0, MRU_MAX - 1),
+    /* 可见应用全集只在本地用（认不出前台时拿来猜游戏 / 播放器），不外发 */
+    visibleCount: apps.length,
     fullscreen: !!raw.fullscreen,
     platform: process.platform
   };

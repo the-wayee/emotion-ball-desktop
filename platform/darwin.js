@@ -37,18 +37,21 @@ async function frontApp() {
   return { app: name, self: false };
 }
 
+/* 用 lsappinfo visibleProcessList 而不是 ps：
+ *   - 只列有 Dock 图标的应用（本机 17 个 vs ps 的 118 个进程），
+ *     不用再靠正则去猜哪些是 Helper / 后台服务
+ *   - 给的是本地化名，和 frontApp() 一致（都拿到「飞书」而不是 Feishu）
+ * 注意它的顺序**不是**前后台顺序 —— 实测切到某个应用后它可能仍排在第二，
+ * 所以「最近用过哪些」由 activity.js 自己维护 MRU，不依赖这里的次序。 */
 async function runningApps() {
-  const out = await run('ps', ['-axo', 'comm=']);
-  const set = new Set();
-  for (const line of out.split('\n')) {
-    /* 嵌套 bundle（WeChat.app/.../WeChatAppEx.app/...）要取最后一段，
-     * 用 indexOf 会拿到中间那截路径 */
-    const i = line.lastIndexOf('.app/Contents/MacOS/');
-    if (i < 0) continue;
-    const name = line.slice(i + 20).trim();
-    if (name) set.add(name);
+  const out = await run('lsappinfo', ['visibleProcessList']);
+  const names = [];
+  for (const m of out.matchAll(/"([^"]+)"/g)) {
+    /* 这个接口把名字里的空格换成了下划线：Google_Chrome / WPS_Office */
+    const name = m[1].replace(/_/g, ' ').trim();
+    if (name && !names.includes(name)) names.push(name);
   }
-  return [...set];
+  return names;
 }
 
 /** 任一显示器的菜单栏 + Dock 都被隐藏 → 大概率有应用在全屏 */

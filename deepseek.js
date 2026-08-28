@@ -45,11 +45,14 @@ function systemPrompt(emotions) {
 
 /** 拼用户消息：当前活动 + 最近说过的话（避免重复） */
 function userPrompt(act, recent) {
+  /* 分类不出来时别硬套模板 ——「看起来在不太看得出在干嘛」读着很蠢 */
   const lines = [
-    `用户现在在用：${act.app || '不知道'}（看起来在${act.label}）`
+    act.key === 'unknown'
+      ? (act.app ? `用户现在在用：${act.app}` : '看不出用户在用什么应用')
+      : `用户现在在用：${act.app || '某个应用'}（看起来在${act.label}）`
   ];
-  if (act.alsoRunning && act.alsoRunning.length) {
-    lines.push(`后台还开着：${act.alsoRunning.join('、')}`);
+  if (act.recentApps && act.recentApps.length) {
+    lines.push(`刚才还在用：${act.recentApps.join('、')}`);
   }
   const hour = new Date().getHours();
   lines.push(`现在是 ${hour} 点`);

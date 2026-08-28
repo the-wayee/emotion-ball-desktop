@@ -10,12 +10,15 @@
  * ============================================================ */
 'use strict';
 
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell } = require('electron');
 const path = require('path');
 const http = require('http');
 const REACT = require('./reactions');
 const activity = require('./activity');
 const deepseek = require('./deepseek');
+const settings = require('./settings');
+
+const IS_MAC = process.platform === 'darwin';
 
 const WIN_W = 280;
 const WIN_H = 240;
@@ -38,8 +41,7 @@ const CROUCH_MS = 150;    /* 蹬地前的下蹲蓄力 */
 const ACTIVE_MS = 45000;    /* 45s 内算活跃期，动作频繁 */
 const SLEEP_MS = 150000;    /* 150s 后睡觉 */
 
-const AI_TICK_MS = 20000;   /* 多久查一次「你在干嘛」（查本身很便宜，45ms）*/
-const AWAY_MS = 5 * 60 * 1000;  /* 光标这么久没动 = 人不在，别自言自语 */
+const AI_TICK_MS = 20000;   /* 多久查一次「你在干嘛」 */
 
 const SULK_AT = 8;          /* 连击到第几下彻底不理人 */
 const SULK_MS = 10000;      /* 闹脾气时长：期间点击 / 悬停一律无响应 */
@@ -49,6 +51,7 @@ const SLEEP_ID = '00';      /* 睡眠 */
 const WALK_ID = '50';       /* 散步（自定义段，渲染进程运行时注册） */
 
 let win = null;
+let setWin = null;
 let tray = null;
 let apiServer = null;
 let pollTimer = null;
@@ -121,13 +124,53 @@ function createWindow() {
 
   /* screen-saver 层级 + 跨空间可见：全屏应用之上也能浮着 */
   win.setAlwaysOnTop(true, 'screen-saver');
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  /* visibleOnFullScreen 只在 macOS 有意义；Windows 上 skipTaskbar + 置顶就够了 */
+  if (IS_MAC) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
-  /* 默认穿透，但仍转发 mousemove —— 渲染进程靠它做球身命中检测 */
-  win.setIgnoreMouseEvents(true, { forwardMouseMove: true });
+  /* 默认穿透，但仍转发 mousemove —— 渲染进程靠它做球身命中检测。
+   * 选项名是 forward，不是 forwardMouseMove：后者是错的，会被静默忽略，
+   * 结果就是穿透时收不到 mousemove，小球永远点不动 */
+  win.setIgnoreMouseEvents(true, { forward: true });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   if (process.argv.includes('--dev')) win.webContents.openDevTools({ mode: 'detach' });
+}
+
+/* ---------------- 设置窗口 ---------------- */
+
+function openSettings() {
+  if (setWin && !setWin.isDestroyed()) { setWin.show(); setWin.focus(); return; }
+  setWin = new BrowserWindow({
+    width: 440,
+    height: 720,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    title: '桌宠设置',
+    show: false,
+    /* macOS 隐藏了 Dock 图标（accessory app），窗口仍能正常显示与聚焦，
+     * 但要主动 app.focus 才会抢到键盘焦点 */
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-settings.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  setWin.setMenuBarVisibility(false);          /* Windows 上默认会有一条菜单栏 */
+  setWin.loadFile(path.join(__dirname, 'renderer', 'settings.html'));
+  setWin.once('ready-to-show', () => {
+    setWin.show();
+    app.focus({ steal: true });
+  });
+  setWin.on('closed', () => { setWin = null; });
+}
+
+/** 配置改动后立即生效，不用重启 */
+function applySettings() {
+  const c = settings.load();
+  autoBehave = c.pet.autoBehave;
+  aiOn = c.comment.enabled;
+  refreshTrayMenu();
 }
 
 /* ---------------- 散步（物理版）----------------
@@ -406,7 +449,7 @@ async function comment(act) {
   if (aiBusy || !emotions.length) return null;
   aiBusy = true;
   try {
-    if (!act) act = await activity.snapshot();
+    if (!act) act = await activity.snapshot(screen.getAllDisplays());
     lastActKey = act.key;
     const r = await deepseek.comment(act, emotions, recentSaid);
     if (!r) return null;
@@ -423,23 +466,30 @@ async function comment(act) {
 }
 
 async function tickAI() {
-  if (!aiOn || aiBusy || !deepseek.isReady()) return;
+  if (aiBusy || !settings.isReady() || !aiOn) return;
   const now = Date.now();
+  const c = settings.load().comment;
 
+  /* 用户设的安静时段 */
+  if (!settings.withinActiveHours(new Date())) return;
   /* 人不在就别自言自语 */
-  if (now - lastCursorMove > AWAY_MS) return;
+  if (now - lastCursorMove > c.awayMin * 60000) return;
   /* 闹脾气 / 正在走 / 话还没说完，都不插嘴。睡着倒是可以醒来说一句 */
   if (now < sulkUntil || walk) return;
   if (tempBackAt && now < tempBackAt) return;
+  /* 硬下限，防止切来切去烧额度 */
+  if (now - lastComment < c.minGapMin * 60000) return;
 
-  const c = deepseek.loadConfig();
-  if (now - lastComment < c.minGapMs) return;   /* 硬下限，防止切来切去烧额度 */
+  const act = await activity.snapshot(screen.getAllDisplays());
 
-  const act = await activity.snapshot();
+  /* 全屏 / 游戏时不打扰 —— 放在采样之后，因为这两个判断都要快照的结果 */
+  if (c.quietWhenFullscreen && act.fullscreen) return;
+  if (c.quietWhenGaming && act.key === 'gaming') return;
+
   const changed = lastActKey !== null && act.key !== lastActKey;
   lastActKey = act.key;
-  /* 活动类别变了就值得马上说一句，否则等到 everyMs */
-  if (!changed && now - lastComment < c.everyMs) return;
+  /* 活动类别变了就值得马上说一句，否则等到 everyMin */
+  if (!changed && now - lastComment < c.everyMin * 60000) return;
 
   await comment(act);
 }
@@ -491,7 +541,7 @@ function startPoll() {
 function setClickThrough(on) {
   if (!win || win.isDestroyed() || clickThrough === on) return;
   clickThrough = on;
-  if (on) win.setIgnoreMouseEvents(true, { forwardMouseMove: true });
+  if (on) win.setIgnoreMouseEvents(true, { forward: true });
   else win.setIgnoreMouseEvents(false);
 }
 
@@ -513,10 +563,13 @@ function emotionSubmenus() {
 
 function buildTray() {
   if (tray) tray.destroy();
+  /* macOS 菜单栏要模板图（单色随主题反色）；Windows 托盘要彩色，
+   * 尺寸也不同（16 vs 18），套用同一套会糊 */
+  const size = IS_MAC ? 18 : 16;
   const img = nativeImage
     .createFromPath(path.join(__dirname, 'assets', 'tray.png'))
-    .resize({ width: 18, height: 18 });
-  img.setTemplateImage(true);
+    .resize({ width: size, height: size });
+  if (IS_MAC) img.setTemplateImage(true);
   tray = new Tray(img);
   tray.setToolTip('Emotion Ball 桌宠');
   refreshTrayMenu();
@@ -530,18 +583,22 @@ function refreshTrayMenu() {
       label: '自发行为（散步 / 小动作）',
       type: 'checkbox',
       checked: autoBehave,
-      click: () => { autoBehave = !autoBehave; if (!autoBehave) stopWalk(); refreshTrayMenu(); }
+      click: () => {
+        settings.save({ pet: { autoBehave: !autoBehave } });
+        applySettings();
+        if (!autoBehave) stopWalk();
+      }
     },
     { type: 'separator' },
-    deepseek.isReady()
-      ? {
-          label: 'AI 评论（DeepSeek）',
-          type: 'checkbox',
-          checked: aiOn,
-          click: () => { aiOn = !aiOn; refreshTrayMenu(); }
-        }
-      : { label: 'AI 评论：未配置 key', enabled: false },
-    { label: '现在让它说一句', enabled: deepseek.isReady(), click: () => comment() },
+    { label: '设置…', click: openSettings },
+    {
+      label: settings.apiKey() ? 'AI 评论（DeepSeek）' : 'AI 评论：还没填 Key',
+      type: 'checkbox',
+      checked: aiOn && settings.isReady(),
+      enabled: !!settings.apiKey(),
+      click: () => { settings.save({ comment: { enabled: !aiOn } }); applySettings(); }
+    },
+    { label: '现在让它说一句', enabled: settings.isReady(), click: () => comment() },
     { type: 'separator' },
     { label: '表情', submenu: emotionSubmenus() },
     {
@@ -613,8 +670,9 @@ function startApi() {
         clicks: clickN,
         sulkMsLeft: Math.max(0, sulkUntil - Date.now()),
         ai: {
-          ready: deepseek.isReady(),
+          ready: settings.isReady(),
           on: aiOn,
+          withinHours: settings.withinActiveHours(new Date()),
           lastCommentMsAgo: lastComment ? Date.now() - lastComment : null,
           awayMs: Date.now() - lastCursorMove
         },
@@ -634,16 +692,22 @@ function startApi() {
       });
       return;
     }
+    /* 打开设置窗口（和右键菜单里的入口等价，便于脚本化 / 调试） */
+    if (req.method === 'POST' && req.url === '/settings') {
+      openSettings();
+      res.end('{"ok":true}');
+      return;
+    }
     /* 看看它以为你在干嘛（调分类规则用） */
     if (req.method === 'GET' && req.url === '/activity') {
-      activity.snapshot().then(a => res.end(JSON.stringify(a)));
+      activity.snapshot(screen.getAllDisplays()).then(a => res.end(JSON.stringify(a)));
       return;
     }
     /* 手动催一次评论，返回模型给的原样结果，便于排查 */
     if (req.method === 'POST' && req.url === '/comment') {
-      if (!deepseek.isReady()) {
+      if (!settings.isReady()) {
         res.statusCode = 503;
-        res.end('{"ok":false,"reason":"未配置 DeepSeek key，见 config.example.json"}');
+        res.end('{"ok":false,"reason":"AI 评论未开启或未填 Key，右键桌宠 → 设置"}');
         return;
       }
       comment().then(r => res.end(JSON.stringify({ ok: !!r, result: r })));
@@ -662,7 +726,7 @@ function startApi() {
       return;
     }
     res.statusCode = 404;
-    res.end('{"ok":false,"hint":"GET /emotions | GET /state | GET /activity | POST /emotion | POST /walk | POST /comment"}');
+    res.end('{"ok":false,"hint":"GET /emotions | GET /state | GET /activity | POST /emotion | POST /walk | POST /comment | POST /settings"}');
   });
 
   apiServer.on('error', e => console.error('[api] 启动失败：', e.message));
@@ -698,6 +762,27 @@ ipcMain.on('poke', () => { wake(); stopWalk(); });
 
 ipcMain.on('react', (_e, kind) => react(kind));
 
+ipcMain.handle('settings:get', () => settings.load());
+
+ipcMain.handle('settings:save', (_e, patch) => {
+  const c = settings.save(patch || {});
+  applySettings();
+  return c;
+});
+
+ipcMain.handle('settings:probe', () => activity.snapshot(screen.getAllDisplays()));
+
+ipcMain.handle('settings:test', async () => {
+  if (!settings.apiKey()) return { ok: false, reason: '还没填 API Key' };
+  if (!settings.load().comment.enabled) return { ok: false, reason: 'AI 评论没打开' };
+  const r = await comment();
+  return r ? { ok: true, result: r } : { ok: false, reason: '请求失败,看终端日志' };
+});
+
+ipcMain.handle('settings:openFolder', () => shell.showItemInFolder(settings.configPath()));
+
+ipcMain.handle('settings:close', () => { if (setWin && !setWin.isDestroyed()) setWin.close(); });
+
 ipcMain.on('menu', () => {
   Menu.buildFromTemplate([
     { label: '散步一段', click: () => { wake(); startWalk(Math.random() < 0.5 ? -1 : 1, 4); } },
@@ -715,10 +800,9 @@ app.whenReady().then(() => {
   createWindow();
   startPoll();
   startApi();
+  applySettings();                 /* 把落盘的配置灌进运行时 */
   aiTimer = setInterval(tickAI, AI_TICK_MS);
-  if (!deepseek.isReady()) {
-    console.log('[deepseek] 未配置 key，AI 评论已关闭（复制 config.example.json 为 config.local.json 填入即可）');
-  }
+  if (!settings.apiKey()) console.log('[deepseek] 还没填 Key —— 右键桌宠 → 设置');
 });
 
 app.on('window-all-closed', () => app.quit());

@@ -31,8 +31,8 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 | 拖拽球身 | 移动窗口(位移 > 6px 才算拖拽) |
 | 单击 | **说话**:表情 + 气泡台词,连点会越来越不耐烦 |
 | 双击 | 撒花 + 高兴的台词 |
-| 右键 | 表情菜单 |
-| 托盘图标 | 散步 / 自发行为开关 / 表情 / 形态 / 线稿 / 回到右下角 / 退出 |
+| 右键 | 设置… / AI 评论开关 / 让它说一句 / 散步 / 表情 / 退出 |
+| 托盘图标 | 同上,外加形态 / 线稿 / 回到右下角 |
 | 移动鼠标 | 全局注视跟随(主进程轮询光标,球外也跟) |
 | 什么都不做 | 它自己会散步、好奇张望、发呆、伸懒腰 |
 
@@ -123,52 +123,67 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 它会周期性看一眼你在用什么应用,把「在写代码 / 在玩游戏 / 在看视频」这类**分类**
 交给 DeepSeek,换回一句评论,用表情 + 气泡说出来。
 
-### 配置
+### 配置:右键桌宠 → 设置
 
-```bash
-cp config.example.json config.local.json
-# 编辑 config.local.json 填入 apiKey(或设环境变量 DEEPSEEK_API_KEY)
-```
+全部在图形界面里改,改完立即生效,不用重启,也不用编辑任何文件。
 
-`config.local.json` 已在 `.gitignore` 里,key 不会进仓库。**没配 key 时整个功能静默关闭**,
-不报错也不打扰。
+| 项 | 说明 |
+|---|---|
+| AI 评论开关 | 关掉后其余功能不受影响 |
+| API Key / 模型 | 存在本机配置文件,权限 `0600`,不进仓库 |
+| 每隔 N 分钟说一句 | 1~120 分钟 |
+| 最短间隔 | 硬下限。切换应用会让它想马上开口,这个值防止频繁切换烧额度 |
+| 只在某时间段说话 | 支持跨夜(22:00 → 02:00) |
+| 全屏时不打扰 | 见下方平台差异 |
+| 玩游戏时不打扰 | 按活动分类判断,不依赖全屏 |
+| 鼠标 N 分钟没动就当人不在 | 默认 5 分钟 |
+| 自发散步与小动作 | 桌宠本身的行为开关 |
 
-| 配置项 | 默认 | 说明 |
-|---|---|---|
-| `apiKey` | — | DeepSeek key;也可用环境变量 `DEEPSEEK_API_KEY` |
-| `model` | `deepseek-chat` | |
-| `everyMs` | 600000 | 没别的事发生时,多久评论一次 |
-| `minGapMs` | 180000 | 两次调用的**硬下限**,防止切来切去烧额度 |
+界面底部有「测试一句」按钮,会立刻发一次真实请求并把结果显示出来;
+「现在的状态」一栏实时显示它认为你在用什么应用、是否全屏。
+
+配置落在 `app.getPath('userData')/config.json`(不是项目目录 —— 打包成 .app 后
+项目目录是只读的,设置就存不进去了)。也支持环境变量 `DEEPSEEK_API_KEY` 覆盖 Key。
 
 ### 什么时候会说话
 
-- 活动**分类变了**(写代码 → 玩游戏)→ 马上说一句,但受 `minGapMs` 约束;
-- 否则每 `everyMs` 一次。
+- 活动**分类变了**(写代码 → 玩游戏)→ 马上说一句,但受最短间隔约束;
+- 否则每 N 分钟一次。
 
-这几种情况一律不说:光标 5 分钟没动(人不在)、正在闹脾气、正在散步、上一句还没说完。
-睡着了倒是会醒过来说(但不播唤醒序列,免得白闪一下)。
+不说的情况:不在设定时段、光标超时没动、全屏 / 游戏中(如果开了对应开关)、
+正在闹脾气、正在散步、上一句还没说完。睡着了会醒过来说(但不播唤醒序列,免得白闪)。
 
 ### 隐私
 
 发出去的**只有应用名和分类**,例如「用户现在在用:Code(看起来在写代码)」。
-**不读窗口标题** —— 那里面常有文件路径、文档名、聊天对象。想要更精准的评论可以自己加,
-但那是另一个量级的信息暴露,默认不开(见 [activity.js](activity.js) 文件头)。
+**不读窗口标题** —— 那里面常有文件路径、文档名、聊天对象。默认不开,见
+[activity.js](activity.js) 文件头。
 
-前台是桌宠自己时会沿用上一个已知应用,不然它会以为你一直在用它。
+### 平台差异
 
-### 成本
+| | macOS | Windows |
+|---|---|---|
+| 前台应用 | `lsappinfo`(免权限,返回本地化显示名) | PowerShell + `user32` P/Invoke |
+| 后台应用 | `ps` 过滤 `.app/Contents/MacOS/` | `Get-Process` 取有窗口的进程 |
+| 全屏判定 | 菜单栏与 Dock 是否隐藏 | 前台窗口矩形 vs 显示器矩形 |
+| 采样耗时 | ~45ms | ~1s(PowerShell 启动 + `Add-Type` 编译) |
 
-system 提示(含 32 个表情清单)是固定的,DeepSeek 会自动命中上下文缓存。
-按默认 10 分钟一次算,一天约 140 次调用,量很小。
+> **macOS 全屏判定是启发式的**:如果你平时就手动隐藏菜单栏和 Dock,它会一直判定为
+> 全屏,AI 就永远不说话。设置界面里对此有提示,把「全屏时不打扰」关掉即可。
+>
+> **Windows 侧代码尚未在真机验证过**(开发机是 macOS)。跑起来后先执行
+> `curl http://127.0.0.1:17817/activity` 核对识别结果,有问题告诉我。
+
+平台实现隔离在 [platform/](platform/) 下,统一返回 `{ app, apps, fullscreen }`,
+任何一步失败都退化成「认不出在干嘛」,不会崩。
 
 ### 调试
 
 ```bash
-curl http://127.0.0.1:17817/activity      # 看它以为你在干嘛(调分类规则用)
-curl -X POST http://127.0.0.1:17817/comment   # 手动催一句,返回模型原样结果
+curl http://127.0.0.1:17817/activity       # 看它以为你在干嘛
+curl -X POST http://127.0.0.1:17817/comment  # 手动催一句,返回模型原样结果
+curl -X POST http://127.0.0.1:17817/settings # 打开设置窗口
 ```
-
-托盘菜单里有「AI 评论」开关和「现在让它说一句」。
 
 ## AI 接口
 
@@ -207,9 +222,13 @@ POST 的 body 原样转给引擎的 `handleAIMessage`,所以未知 ID / 坏 JSON
 ```
 main.js              主进程:透明置顶窗 / 光标轮询 / 行为调度 / 交互反应 / 托盘 / HTTP
 reactions.js         罐头台词与表情(纯数据)
-activity.js          你在干嘛:lsappinfo 取前台应用 + ps 取后台,关键词分类
+settings.js          配置读写:默认值 / 校验 / 落盘到 userData
+activity.js          活动分类(平台无关)
+platform/darwin.js   macOS:lsappinfo + ps + 菜单栏全屏启发式
+platform/win32.js    Windows:PowerShell + user32 P/Invoke(未在真机验证)
 deepseek.js          DeepSeek 客户端:活动快照 → {emotionId, text}
-config.example.json  配置模板(复制成 config.local.json 填 key,已 gitignore)
+preload-settings.js  设置窗口的安全桥(与桌宠窗口分开)
+renderer/settings.*  设置界面
 preload.js           contextBridge 安全桥(contextIsolation 开启)
 renderer/
   index.html         按 数据→配置→渲染→驱动 顺序加载引擎四件套

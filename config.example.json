@@ -1,9 +1,0 @@
-{
-  "deepseek": {
-    "apiKey": "sk-在这里填你的 DeepSeek key",
-    "model": "deepseek-chat",
-    "enabled": true,
-    "everyMs": 600000,
-    "minGapMs": 180000
-  }
-}

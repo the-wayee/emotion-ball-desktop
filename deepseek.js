@@ -5,42 +5,15 @@
  * { emotionId, text } —— 和 reactions.js 里的罐头台词同构，
  * 所以主进程那边 say() 不用区分来源。
  *
- * key 从 config.local.json 或环境变量 DEEPSEEK_API_KEY 读，
- * 两者都没有就整个功能静默关闭（不报错、不打扰）。
+ * 配置统一由 settings.js 管（右键桌宠 → 设置），本文件不自己读文件。
+ * 没有 key 就直接返回 null，整个功能静默关闭，不报错也不打扰。
  * ============================================================ */
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
+const settings = require('./settings');
 
 const API = 'https://api.deepseek.com/chat/completions';
 const TIMEOUT_MS = 20000;
-
-let cfg = null;
-
-function loadConfig() {
-  if (cfg) return cfg;
-  let file = {};
-  try {
-    file = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.local.json'), 'utf8'));
-  } catch (e) { /* 没有配置文件是正常情况 */ }
-
-  const ds = file.deepseek || {};
-  cfg = {
-    apiKey: process.env.DEEPSEEK_API_KEY || ds.apiKey || '',
-    model: ds.model || 'deepseek-chat',
-    enabled: ds.enabled !== false,
-    /* 多久评论一次；以及两次调用之间的硬下限，防止切来切去把额度烧了 */
-    everyMs: Number(ds.everyMs) || 10 * 60 * 1000,
-    minGapMs: Number(ds.minGapMs) || 3 * 60 * 1000
-  };
-  return cfg;
-}
-
-function isReady() {
-  const c = loadConfig();
-  return !!(c.enabled && c.apiKey);
-}
 
 /** 拼系统提示：把可用表情列表塞进去，模型才知道能选哪些 ID */
 function systemPrompt(emotions) {
@@ -84,8 +57,9 @@ function userPrompt(act, recent) {
  * @returns {Promise<{id:string, text:string}|null>} 失败一律返回 null，宿主保持安静
  */
 async function comment(act, emotions, recent) {
-  const c = loadConfig();
-  if (!c.enabled || !c.apiKey) return null;
+  const key = settings.apiKey();
+  if (!key) return null;
+  const model = settings.load().deepseek.model;
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -95,10 +69,10 @@ async function comment(act, emotions, recent) {
       signal: ctrl.signal,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${c.apiKey}`
+        Authorization: `Bearer ${key}`
       },
       body: JSON.stringify({
-        model: c.model,
+        model: model,
         messages: [
           { role: 'system', content: systemPrompt(emotions) },
           { role: 'user', content: userPrompt(act, recent) }
@@ -144,4 +118,4 @@ async function comment(act, emotions, recent) {
   }
 }
 
-module.exports = { comment, isReady, loadConfig, systemPrompt, userPrompt };
+module.exports = { comment, systemPrompt, userPrompt };

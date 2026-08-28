@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+  <title>桌宠设置</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <main class="wrap">
+
+    <section class="card">
+      <div class="row row-main">
+        <div>
+          <div class="label">AI 评论</div>
+          <div class="hint">让它观察你在用什么应用，偶尔冒一句话</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="enabled">
+          <span class="track"></span>
+        </label>
+      </div>
+
+      <div class="fields" id="aiFields">
+        <div class="field">
+          <label for="apiKey">DeepSeek API Key</label>
+          <div class="key-row">
+            <input type="password" id="apiKey" placeholder="sk-..." spellcheck="false" autocomplete="off">
+            <button type="button" class="ghost" id="reveal">显示</button>
+          </div>
+          <div class="hint" id="keyHint"></div>
+        </div>
+        <div class="field">
+          <label for="model">模型</label>
+          <input type="text" id="model" spellcheck="false" autocomplete="off">
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title">多久说一次</div>
+      <div class="field">
+        <label for="everyMin">没别的事发生时,每隔 <b id="everyVal"></b> 分钟说一句</label>
+        <input type="range" id="everyMin" min="1" max="120" step="1">
+      </div>
+      <div class="field">
+        <label for="minGapMin">两次之间至少间隔 <b id="minGapVal"></b> 分钟</label>
+        <input type="range" id="minGapMin" min="1" max="60" step="1">
+        <div class="hint">硬下限。切换应用会让它想马上开口,这个值防止频繁切换把额度烧掉。</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title">什么时候别打扰</div>
+
+      <label class="check">
+        <input type="checkbox" id="useActiveHours">
+        <span>只在这个时间段说话</span>
+      </label>
+      <div class="time-row" id="hoursRow">
+        <input type="time" id="activeFrom">
+        <span class="dash">→</span>
+        <input type="time" id="activeTo">
+        <span class="hint inline" id="wrapHint"></span>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="quietWhenFullscreen">
+        <span>全屏时不打扰</span>
+      </label>
+      <div class="hint indent" id="fsHint"></div>
+
+      <label class="check">
+        <input type="checkbox" id="quietWhenGaming">
+        <span>检测到在玩游戏时不打扰</span>
+      </label>
+
+      <div class="field">
+        <label for="awayMin">鼠标 <b id="awayVal"></b> 分钟没动就当人不在,不自言自语</label>
+        <input type="range" id="awayMin" min="1" max="60" step="1">
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title">桌宠行为</div>
+      <label class="check">
+        <input type="checkbox" id="autoBehave">
+        <span>自发散步与小动作</span>
+      </label>
+    </section>
+
+    <section class="card status">
+      <div class="title">现在的状态</div>
+      <div class="kv" id="probe">读取中…</div>
+      <button type="button" class="ghost wide" id="refresh">重新检测</button>
+    </section>
+
+    <div class="foot">
+      <button type="button" class="ghost" id="openFolder">配置文件位置</button>
+      <div class="spacer"></div>
+      <button type="button" class="ghost" id="test">测试一句</button>
+      <button type="button" class="primary" id="save">保存</button>
+    </div>
+    <div class="toast" id="toast"></div>
+
+  </main>
+  <script src="settings-ui.js"></script>
+</body>
+</html>

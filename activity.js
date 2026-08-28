@@ -80,8 +80,10 @@ const RULES = [
 ];
 
 /* 最近用过的应用（MRU）—— 每次采样看到新的前台应用就往前挪。
+ * 约定：mru[0] 就是当前前台应用，往后依次是之前用的，越靠后越久。
+ * 这样模型拿到的是一条有序轨迹，能把"现在在干嘛"和"刚从哪儿过来"连起来看。
  * 比"当前跑着哪些进程"有意义得多：进程列表是启动顺序，跟用户在干嘛无关。
- * 上限压到 5 个，塞进提示词里也就十几个 token。 */
+ * 上限 5 个，塞进提示词里也就十几个 token。 */
 const MRU_MAX = 5;
 const mru = [];
 
@@ -152,8 +154,8 @@ async function snapshot(displays) {
     self: cur.self,            /* 当前前台就是桌宠自己，app 是记住的上一个 */
     key: cat.key,
     label: cat.label,
-    /* 发给模型的只有这一小串：最近用过的应用，去掉当前这个（已经单独说了） */
-    recentApps: mru.filter(a => a !== cur.app).slice(0, MRU_MAX - 1),
+    /* 发给模型的只有这一小串：[0] 是当前应用，往后是之前用过的 */
+    recentApps: mru.slice(0, MRU_MAX),
     /* 可见应用全集只在本地用（认不出前台时拿来猜游戏 / 播放器），不外发 */
     visibleCount: apps.length,
     fullscreen: !!raw.fullscreen,

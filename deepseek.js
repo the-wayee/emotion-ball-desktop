@@ -51,8 +51,11 @@ function userPrompt(act, recent) {
       ? (act.app ? `用户现在在用：${act.app}` : '看不出用户在用什么应用')
       : `用户现在在用：${act.app || '某个应用'}（看起来在${act.label}）`
   ];
-  if (act.recentApps && act.recentApps.length) {
-    lines.push(`刚才还在用：${act.recentApps.join('、')}`);
+  /* recentApps[0] 就是当前应用，这里只把"之前用的"单独列出来，
+   * 免得同一个名字在提示里出现两次 */
+  const before = (act.recentApps || []).slice(1);
+  if (before.length) {
+    lines.push(`在这之前依次用过：${before.join('、')}`);
   }
   const hour = new Date().getHours();
   lines.push(`现在是 ${hour} 点`);

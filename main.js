@@ -110,13 +110,32 @@ const send = (ch, payload) => {
 
 /* ---------------- 窗口 ---------------- */
 
-function createWindow() {
+/** 存档位置还在不在某块屏幕上 —— 拔掉外接显示器之后，
+ *  旧坐标可能落在虚拟桌面之外，窗口就再也找不回来了 */
+function onScreen(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  /* 至少露出一角才算数 */
+  const m = 60;
+  return screen.getAllDisplays().some(d => {
+    const b = d.bounds;
+    return x + WIN_W - m > b.x && x + m < b.x + b.width &&
+           y + WIN_H - m > b.y && y + m < b.y + b.height;
+  });
+}
+
+function defaultPos() {
   const wa = screen.getPrimaryDisplay().workArea;
+  return { x: wa.x + wa.width - WIN_W - 40, y: wa.y + wa.height - WIN_H - 40 };
+}
+
+function createWindow() {
+  const p = settings.load().pet;
+  const pos = onScreen(p.x, p.y) ? { x: p.x, y: p.y } : defaultPos();
   win = new BrowserWindow({
     width: WIN_W,
     height: WIN_H,
-    x: wa.x + wa.width - WIN_W - 40,
-    y: wa.y + wa.height - WIN_H - 40,
+    x: pos.x,
+    y: pos.y,
     transparent: true,
     frame: false,
     resizable: false,
@@ -148,6 +167,18 @@ function createWindow() {
 }
 
 /* ---------------- 设置窗口 ---------------- */
+
+/* 位置存盘要节流：散步时窗口每帧都在动，每帧写文件会把磁盘打爆 */
+let posSaveTimer = null;
+function savePosition() {
+  if (posSaveTimer) return;
+  posSaveTimer = setTimeout(() => {
+    posSaveTimer = null;
+    if (!win || win.isDestroyed()) return;
+    const b = win.getBounds();
+    settings.save({ pet: { x: b.x, y: b.y } });
+  }, 1200);
+}
 
 function setFrontPoll(ms) {
   if (frontTimer) clearInterval(frontTimer);
@@ -193,6 +224,8 @@ function applySettings() {
   const c = settings.load();
   autoBehave = c.pet.autoBehave;
   aiOn = c.comment.enabled;
+  shape = c.pet.shape;
+  sketch = c.pet.sketch;
   refreshTrayMenu();
 }
 
@@ -304,6 +337,7 @@ function stopWalk() {
     win.setPosition(Math.round(walk.x), Math.round(walk.baseY));
   }
   walk = null;
+  savePosition();
   send('walk', { active: false });
   send('phys', { type: 'settle' });
   setEmotion(phase === 'sleep' ? SLEEP_ID : IDLE_ID);
@@ -743,14 +777,24 @@ function refreshTrayMenu() {
         label: s.label,
         type: 'radio',
         checked: shape === s.id,
-        click: () => { shape = s.id; send('shape', s.id); refreshTrayMenu(); }
+        click: () => {
+          shape = s.id;
+          settings.save({ pet: { shape: s.id } });
+          send('shape', s.id);
+          refreshTrayMenu();
+        }
       }))
     },
     {
       label: '线稿模式',
       type: 'checkbox',
       checked: sketch,
-      click: () => { sketch = !sketch; send('sketch', sketch); refreshTrayMenu(); }
+      click: () => {
+        sketch = !sketch;
+        settings.save({ pet: { sketch } });
+        send('sketch', sketch);
+        refreshTrayMenu();
+      }
     },
     { type: 'separator' },
     { label: '回到右下角', click: resetPosition },
@@ -763,8 +807,9 @@ function refreshTrayMenu() {
 function resetPosition() {
   if (!win || win.isDestroyed()) return;
   stopWalk();
-  const wa = screen.getPrimaryDisplay().workArea;
-  win.setPosition(wa.x + wa.width - WIN_W - 40, wa.y + wa.height - WIN_H - 40);
+  const p = defaultPos();
+  win.setPosition(p.x, p.y);
+  savePosition();
 }
 
 /* ---------------- 本地 HTTP 接口 ----------------
@@ -892,6 +937,10 @@ ipcMain.on('ready', (_e, payload) => {
   emotions = payload.emotions || [];
   groups = payload.groups || [];
   buildTray();
+  /* 渲染进程是拿默认值起来的，这里把存档的形态 / 线稿补下去 */
+  const p = settings.load().pet;
+  if (p.shape !== 'blob') send('shape', p.shape);
+  if (p.sketch) send('sketch', true);
 });
 
 /* 渲染进程命中检测的结果：指针是否压在球身上 */
@@ -907,7 +956,7 @@ ipcMain.on('drag:start', () => {
   drag = { m0: screen.getCursorScreenPoint(), w0: { x: b.x, y: b.y } };
 });
 
-ipcMain.on('drag:end', () => { drag = null; lastInteract = Date.now(); });
+ipcMain.on('drag:end', () => { drag = null; lastInteract = Date.now(); savePosition(); });
 
 ipcMain.on('poke', () => { wake(); stopWalk(); });
 

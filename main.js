@@ -86,6 +86,7 @@ let aiBusy = false;
 let aiTimer = null;
 let lastComment = 0;
 let lastActKey = null;                   /* 上次快照的活动分类，变了就值得说一句 */
+let lastAct = null;                      /* 最近一次快照，设置界面直接用 */
 let recentSaid = [];                     /* 最近说过的话，塞进提示里避免复读 */
 let lastAiError = null;                  /* 最近一次失败原因，设置界面要显示 */
 let lastCursorMove = Date.now();
@@ -470,10 +471,17 @@ async function comment(act) {
 }
 
 async function tickAI() {
-  if (aiBusy || !settings.isReady() || !aiOn) return;
+  if (aiBusy) return;
   const now = Date.now();
   const c = settings.load().comment;
 
+  /* 采样放在所有闸门之前，和 AI 开不开无关 ——
+   * 平台层要靠它记住"上一个非自己的前台应用"。等到打开设置窗口再采样，
+   * 那时前台已经是桌宠自己了，永远只能显示"识别不到"。 */
+  const act = await activity.snapshot(screen.getAllDisplays());
+  lastAct = act;
+
+  if (!settings.isReady() || !aiOn) return;
   /* 用户设的安静时段 */
   if (!settings.withinActiveHours(new Date())) return;
   /* 人不在就别自言自语 */
@@ -484,9 +492,7 @@ async function tickAI() {
   /* 硬下限，防止切来切去烧额度 */
   if (now - lastComment < c.minGapMin * 60000) return;
 
-  const act = await activity.snapshot(screen.getAllDisplays());
-
-  /* 全屏 / 游戏时不打扰 —— 放在采样之后，因为这两个判断都要快照的结果 */
+  /* 全屏 / 游戏时不打扰 */
   if (c.quietWhenFullscreen && act.fullscreen) return;
   if (c.quietWhenGaming && act.key === 'gaming') return;
 
@@ -820,6 +826,7 @@ app.whenReady().then(() => {
   startApi();
   applySettings();                 /* 把落盘的配置灌进运行时 */
   aiTimer = setInterval(tickAI, AI_TICK_MS);
+  setTimeout(tickAI, 1500);        /* 启动后先采一次，别让设置界面一开始就是空的 */
   if (!settings.apiKey()) console.log('[deepseek] 还没填 Key —— 右键桌宠 → 设置');
 });
 

@@ -22,7 +22,7 @@ const impl = (() => {
     console.warn('[activity] 平台实现加载失败：', e.message);
   }
   /* Linux 等：不报错，只是认不出在干嘛 */
-  return { probe: async () => ({ app: null, apps: [], fullscreen: false }) };
+  return { probe: async () => ({ app: null, self: false, apps: [], fullscreen: false }) };
 })();
 
 /* 分类关键词：小写子串匹配。中英文都列上 ——
@@ -94,7 +94,7 @@ async function snapshot(displays) {
     raw = await impl.probe(displays);
   } catch (e) {
     console.warn('[activity] 采样失败：', e.message);
-    raw = { app: null, apps: [], fullscreen: false };
+    raw = { app: null, self: false, apps: [], fullscreen: false };
   }
 
   const apps = (raw.apps || []).filter(a => a && !NOISE.test(a));
@@ -112,6 +112,7 @@ async function snapshot(displays) {
 
   return {
     app: raw.app || null,
+    self: !!raw.self,          /* 当前前台就是桌宠自己，app 是记住的上一个 */
     key: cat.key,
     label: cat.label,
     /* 只挑分类命中的，避免把一整屏进程名发出去 */

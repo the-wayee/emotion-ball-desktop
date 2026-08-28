@@ -23,15 +23,18 @@ function run(cmd, args) {
   });
 }
 
+/** @returns {{app:string|null, self:boolean}} self = 当前前台就是桌宠自己 */
 async function frontApp() {
   const asn = (await run('lsappinfo', ['front'])).trim();
-  if (!asn) return lastKnownApp;
+  if (!asn) return { app: lastKnownApp, self: false };
   const info = await run('lsappinfo', ['info', '-only', 'name', asn]);
   const m = info.match(/"LSDisplayName"\s*=\s*"([^"]*)"/);
   const name = m ? m[1] : null;
-  if (!name || SELF.test(name)) return lastKnownApp;
+  /* 前台是自己（设置窗口 / 刚点过小球）时退回上一个已知应用，
+   * 并把 self 报上去，界面才能解释清楚显示的是"上一个" */
+  if (!name || SELF.test(name)) return { app: lastKnownApp, self: !!name };
   lastKnownApp = name;
-  return name;
+  return { app: name, self: false };
 }
 
 async function runningApps() {
@@ -58,8 +61,8 @@ function detectFullscreen(displays) {
 }
 
 async function probe(displays) {
-  const [app, apps] = await Promise.all([frontApp(), runningApps()]);
-  return { app, apps, fullscreen: detectFullscreen(displays) };
+  const [front, apps] = await Promise.all([frontApp(), runningApps()]);
+  return { app: front.app, self: front.self, apps, fullscreen: detectFullscreen(displays) };
 }
 
 module.exports = { probe };

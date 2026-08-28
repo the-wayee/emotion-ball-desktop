@@ -83,8 +83,13 @@
     const p = await api.probe();
     if (!p) { $('probe').textContent = '读取失败'; return; }
     const yes = v => (v ? '是' : '否');
+    /* 设置窗口开着的时候，前台应用就是桌宠自己 —— 显示的必然是"上一个"，
+     * 不说清楚会让人以为检测坏了 */
+    const appLine = p.app
+      ? `<b>${esc(p.app)}</b>${p.self ? '　<span class="dim">(你正看着设置窗口,这是切过来之前用的)</span>' : ''}`
+      : (p.self ? '<b>还没见过别的应用</b>　<span class="dim">(切到别的窗口用几秒再回来)</span>' : '<b>识别不到</b>');
     $('probe').innerHTML =
-      `前台应用：<b>${esc(p.app || '识别不到')}</b>\n` +
+      `前台应用：${appLine}\n` +
       `判断在：<b>${esc(p.label)}</b>\n` +
       `全屏中：<b>${yes(p.fullscreen)}</b>　　当前系统：<b>${esc(p.platform)}</b>`;
 

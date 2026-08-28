@@ -94,16 +94,17 @@ function runPS() {
 
 async function probe() {
   const r = await runPS();
-  if (!r) return { app: lastKnownApp, apps: [], fullscreen: false };
+  if (!r) return { app: lastKnownApp, self: false, apps: [], fullscreen: false };
 
   let app = r.app || null;
-  if (!app || SELF.test(app)) app = lastKnownApp;
+  let self = false;
+  if (!app || SELF.test(app)) { self = !!app; app = lastKnownApp; }
   else lastKnownApp = app;
 
   /* ConvertTo-Json 对单元素数组会退化成标量，统一成数组 */
   const apps = Array.isArray(r.apps) ? r.apps : (r.apps ? [r.apps] : []);
 
-  return { app, apps, fullscreen: !!r.fullscreen };
+  return { app, self, apps, fullscreen: !!r.fullscreen };
 }
 
 module.exports = { probe };

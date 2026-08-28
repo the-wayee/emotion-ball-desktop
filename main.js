@@ -225,8 +225,20 @@ function openSettings() {
 }
 
 /** 配置改动后立即生效，不用重启 */
+/* 开机自启的真值在系统里（macOS 登录项 / Windows 注册表），
+ * 配置里那份只是界面回显。以系统为准，两边不一致时把系统对齐到配置。 */
+function applyLoginItem(want) {
+  try {
+    const cur = app.getLoginItemSettings().openAtLogin;
+    if (cur !== want) app.setLoginItemSettings({ openAtLogin: want, openAsHidden: true });
+  } catch (e) {
+    console.warn('[login] 设置开机自启失败：', e.message);
+  }
+}
+
 function applySettings() {
   const c = settings.load();
+  applyLoginItem(c.pet.openAtLogin);
   autoBehave = c.pet.autoBehave;
   aiOn = c.comment.enabled;
   shape = c.pet.shape;

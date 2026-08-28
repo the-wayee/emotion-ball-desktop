@@ -15,7 +15,8 @@
     quietWhenGaming: 'comment.quietWhenGaming',
     useActiveHours: 'comment.useActiveHours',
     autoBehave: 'pet.autoBehave',
-    dropFall: 'pet.dropFall'
+    dropFall: 'pet.dropFall',
+    openAtLogin: 'pet.openAtLogin'
   };
   const NUMS = { everyMin: 'comment.everyMin', minGapMin: 'comment.minGapMin', awayMin: 'comment.awayMin' };
   const TEXTS = {

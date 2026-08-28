@@ -4,6 +4,21 @@
 
 ## 跑起来
 
+### 装好就能用
+
+```bash
+npm install
+npm run dist        # macOS: dist/*.dmg   Windows: dist/*.exe
+```
+
+macOS 出 arm64 与 x64 两个 `.dmg`(各约 130M),Windows 出 NSIS 安装包。
+装完在设置里勾「开机自启」,以后开机自动出现。
+
+> 没有签名,macOS 首次打开会拦一下:右键 → 打开,或
+> 「系统设置 → 隐私与安全性」里点「仍要打开」。
+
+### 或者直接跑源码
+
 ```bash
 npm install
 npm start

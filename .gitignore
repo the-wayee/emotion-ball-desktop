@@ -8,3 +8,5 @@ dist/
 
 # 本地配置：内含 DeepSeek API key，绝不提交
 config.local.json
+dist/
+assets/icon.iconset/

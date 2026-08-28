@@ -34,6 +34,7 @@ const DEFAULTS = {
     shape: 'blob',         /* blob / wedge / gem */
     sketch: false,
     dropFall: true,        /* 松手后自由落体到屏幕底部；关掉则停在原地 */
+    openAtLogin: false,    /* 开机自启；真值以系统为准，这里只是界面回显 */
     x: null,               /* 上次退出时的窗口位置；null = 默认右下角 */
     y: null
   }
@@ -92,6 +93,7 @@ function normalize(c) {
       shape: ['blob', 'wedge', 'gem'].includes(c.pet.shape) ? c.pet.shape : d.pet.shape,
       sketch: !!c.pet.sketch,
       dropFall: c.pet.dropFall !== false,
+      openAtLogin: !!c.pet.openAtLogin,
       /* 位置允许为空（首次启动），但存进来的必须是有限数 */
       x: Number.isFinite(Number(c.pet.x)) ? Math.round(Number(c.pet.x)) : null,
       y: Number.isFinite(Number(c.pet.y)) ? Math.round(Number(c.pet.y)) : null
@@ -99,25 +101,47 @@ function normalize(c) {
   };
 }
 
+/* 打包后 productName 是「Emotion Ball」，userData 目录跟着变；
+ * 开发时用 npm start 走的是包名 emotion-ball-desktop。同一个人从
+ * npm start 换到 .app，配置（含 API key）会突然读不到 —— 迁一次。 */
+function legacyConfigPaths() {
+  const dir = path.dirname(file());
+  return ['emotion-ball-desktop', 'Emotion Ball']
+    .map(n => path.join(path.dirname(dir), n, 'config.json'))
+    .filter(f => f !== file());
+}
+
 function load() {
   if (cache) return cache;
   let disk = {};
-  try {
-    disk = JSON.parse(fs.readFileSync(file(), 'utf8'));
-  } catch (e) {
-    /* 首次运行：项目根目录有手写的 config.local.json 就导入一次 */
-    try {
-      disk = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.local.json'), 'utf8'));
-      /* 旧字段名兼容 */
-      if (disk.deepseek) {
-        disk.comment = Object.assign({}, disk.comment);
-        if (disk.deepseek.enabled !== undefined) disk.comment.enabled = disk.deepseek.enabled;
-        if (disk.deepseek.everyMs) disk.comment.everyMin = Math.round(disk.deepseek.everyMs / 60000);
-        if (disk.deepseek.minGapMs) disk.comment.minGapMin = Math.round(disk.deepseek.minGapMs / 60000);
-      }
-    } catch (e2) { /* 都没有就用默认值 */ }
+
+  const tryRead = f => {
+    try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return null; }
+  };
+
+  disk = tryRead(file());
+
+  /* 换了应用名之后的第一次启动：把旧目录里的配置搬过来 */
+  if (!disk) {
+    for (const old of legacyConfigPaths()) {
+      disk = tryRead(old);
+      if (disk) { console.log('[settings] 已从旧目录迁入配置：', old); break; }
+    }
   }
-  cache = normalize(merge(DEFAULTS, disk));
+
+  /* 再退一步：项目根目录有手写的 config.local.json 就导入一次 */
+  if (!disk) {
+    disk = tryRead(path.join(__dirname, 'config.local.json'));
+    if (disk && disk.deepseek) {
+      /* 旧字段名兼容 */
+      disk.comment = Object.assign({}, disk.comment);
+      if (disk.deepseek.enabled !== undefined) disk.comment.enabled = disk.deepseek.enabled;
+      if (disk.deepseek.everyMs) disk.comment.everyMin = Math.round(disk.deepseek.everyMs / 60000);
+      if (disk.deepseek.minGapMs) disk.comment.minGapMin = Math.round(disk.deepseek.minGapMs / 60000);
+    }
+  }
+
+  cache = normalize(merge(DEFAULTS, disk || {}));
   return cache;
 }
 

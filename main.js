@@ -37,7 +37,7 @@ const ACTIVE_MS = 45000;    /* 45s 内算活跃期，动作频繁 */
 const SLEEP_MS = 150000;    /* 150s 后睡觉 */
 
 const SULK_AT = 8;          /* 连击到第几下彻底不理人 */
-const SULK_MS = 25000;      /* 闹脾气时长：期间点击 / 悬停一律无响应 */
+const SULK_MS = 10000;      /* 闹脾气时长：期间点击 / 悬停一律无响应 */
 
 const IDLE_ID = '02';       /* 待机 */
 const SLEEP_ID = '00';      /* 睡眠 */
@@ -274,8 +274,9 @@ function react(kind) {
   const wasSleeping = phase === 'sleep';
 
   /* 闹脾气期间是真的不理人：点击、悬停、双击一概不响应。
-   * 表情不是冻住的 —— 它保持在 sulk 那条表情上继续呼吸眨眼，
-   * 只是不给任何新反馈，读起来是"生气"而不是"卡死"。 */
+   * 具体长什么样取决于抽中哪条 sulk：'21'/'38' 会眨眼，看着是在赌气；
+   * '41' 停止终止本身就是 blinkMs:null + gaze:false + settle:'hold'，
+   * 闭眼定格连鼠标都不看 —— 那是"装死"该有的样子，不是卡住。 */
   if (now < sulkUntil) return;
 
   if (kind === 'hover') {

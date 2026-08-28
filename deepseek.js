@@ -5,6 +5,14 @@
  * { emotionId, text } —— 和 reactions.js 里的罐头台词同构，
  * 所以主进程那边 say() 不用区分来源。
  *
+ * 两个关键参数，都是踩坑换来的：
+ *   thinking: disabled —— DeepSeek v4 系是推理模型，默认先产出几百到两千字的
+ *     reasoning_content。为一句 18 字的吐槽思考两千字纯属浪费：实测关掉后
+ *     输出 token 从 1323 降到 16、耗时从 12s 降到 0.9s，台词质量没有变差。
+ *   max_tokens: 1500 —— 兜底。万一换成不认 thinking 参数的模型，推理照跑，
+ *     额度不够就返回空 content + finish_reason=length，表现为"请求失败"。
+ *     实测推理能吃掉 1300+ token，给足空间才不会静默失败。
+ *
  * 配置统一由 settings.js 管（右键桌宠 → 设置），本文件不自己读文件。
  * 没有 key 就直接返回 null，整个功能静默关闭，不报错也不打扰。
  * ============================================================ */
@@ -54,11 +62,13 @@ function userPrompt(act, recent) {
 
 /**
  * 要一条评论。
- * @returns {Promise<{id:string, text:string}|null>} 失败一律返回 null，宿主保持安静
+ * @returns {Promise<{ok:true,result:{id,text}}|{ok:false,reason:string}>}
+ *   失败带上人话原因 —— 之前一律返回 null，界面只能显示"请求失败,看终端日志"，
+ *   为了排查一个空 content 绕了很大一圈。
  */
 async function comment(act, emotions, recent) {
   const key = settings.apiKey();
-  if (!key) return null;
+  if (!key) return { ok: false, reason: '还没填 API Key' };
   const model = settings.load().deepseek.model;
 
   const ctrl = new AbortController();
@@ -79,29 +89,48 @@ async function comment(act, emotions, recent) {
         ],
         response_format: { type: 'json_object' },
         temperature: 1.3,        /* 官方推荐的「闲聊」档，别太板正 */
-        max_tokens: 120
+        thinking: { type: 'disabled' },
+        max_tokens: 1500
       })
     });
 
     if (!res.ok) {
-      console.warn('[deepseek] HTTP', res.status, (await res.text()).slice(0, 200));
-      return null;
+      const body = (await res.text()).slice(0, 300);
+      console.warn('[deepseek] HTTP', res.status, body);
+      let msg = '';
+      try { msg = JSON.parse(body).error?.message || ''; } catch (e) { /* 错误体不是 JSON */ }
+      const hint = res.status === 401 ? 'API Key 不对'
+        : res.status === 402 ? '账户余额不足'
+        : res.status === 429 ? '请求太频繁,稍后再试'
+        : res.status >= 500 ? 'DeepSeek 服务端出错' : '';
+      return { ok: false, reason: `HTTP ${res.status}${hint ? ' · ' + hint : ''}${msg ? ' · ' + msg : ''}` };
     }
 
     const data = await res.json();
-    const raw = data?.choices?.[0]?.message?.content;
-    if (!raw) return null;
+    const choice = data?.choices?.[0];
+    const raw = choice?.message?.content;
+    if (!raw) {
+      /* 空 content 几乎都是推理把额度吃光了 —— 把原因直接说清楚，别让人去翻日志 */
+      const think = (choice?.message?.reasoning_content || '').length;
+      console.warn('[deepseek] content 为空, finish=', choice?.finish_reason, 'reasoning=', think, '字');
+      return {
+        ok: false,
+        reason: choice?.finish_reason === 'length'
+          ? `模型把额度用在推理上了(推理 ${think} 字),没留下正文。换个模型试试`
+          : '模型没有返回内容'
+      };
+    }
 
     let obj;
     try {
       obj = JSON.parse(raw);
     } catch (e) {
       console.warn('[deepseek] 返回不是 JSON:', String(raw).slice(0, 120));
-      return null;
+      return { ok: false, reason: '模型返回的不是 JSON：' + String(raw).slice(0, 40) };
     }
 
     const text = String(obj.text || '').trim();
-    if (!text) return null;
+    if (!text) return { ok: false, reason: '模型返回的 JSON 里没有 text 字段' };
 
     /* 表情 ID 校验放在这里而不是靠引擎兜底：引擎遇到未知 ID 会回落待机，
      * 那样评论文字还在、表情却是待机，看着很怪。这里直接换成一个合理的。 */
@@ -109,13 +138,31 @@ async function comment(act, emotions, recent) {
     const ok = emotions.some(e => e.id === id);
     if (!ok) console.warn('[deepseek] 未知 emotionId:', id, '→ 回落 02');
 
-    return { id: ok ? id : '02', text: text.slice(0, 40) };
+    return { ok: true, result: { id: ok ? id : '02', text: text.slice(0, 40) } };
   } catch (e) {
-    console.warn('[deepseek] 请求失败:', e.name === 'AbortError' ? '超时' : e.message);
-    return null;
+    const why = e.name === 'AbortError' ? `超时(${TIMEOUT_MS / 1000}s)` : e.message;
+    console.warn('[deepseek] 请求失败:', why);
+    return { ok: false, reason: '请求失败：' + why };
   } finally {
     clearTimeout(timer);
   }
 }
 
-module.exports = { comment, systemPrompt, userPrompt };
+/** 拉一次可用模型列表，给设置界面的下拉用；失败返回空数组 */
+async function listModels() {
+  const key = settings.apiKey();
+  if (!key) return [];
+  try {
+    const res = await fetch('https://api.deepseek.com/models', {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!res.ok) return [];
+    const d = await res.json();
+    return (d.data || []).map(m => m.id).filter(Boolean);
+  } catch (e) {
+    return [];
+  }
+}
+
+module.exports = { comment, listModels, systemPrompt, userPrompt };

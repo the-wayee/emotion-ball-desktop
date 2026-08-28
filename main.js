@@ -87,6 +87,7 @@ let aiTimer = null;
 let lastComment = 0;
 let lastActKey = null;                   /* 上次快照的活动分类，变了就值得说一句 */
 let recentSaid = [];                     /* 最近说过的话，塞进提示里避免复读 */
+let lastAiError = null;                  /* 最近一次失败原因，设置界面要显示 */
 let lastCursorMove = Date.now();
 let lastCursorPt = { x: -1, y: -1 };
 const lastPick = new Map();              /* 每个池上次抽中的下标，避免连续重复 */
@@ -452,14 +453,17 @@ async function comment(act) {
     if (!act) act = await activity.snapshot(screen.getAllDisplays());
     lastActKey = act.key;
     const r = await deepseek.comment(act, emotions, recentSaid);
-    if (!r) return null;
+    if (!r.ok) { lastAiError = r.reason; return null; }
+    lastAiError = null;
+    const line = r.result;
     lastComment = Date.now();
-    recentSaid.push(r.text);
+    recentSaid.push(line.text);
     if (recentSaid.length > 5) recentSaid.shift();
     wake(true);                 /* 睡着也醒过来说，但不播 '01' 免得白闪 */
     stopWalk();
-    say(r);
-    return r;
+    clearSulk();                /* 手动催的那次可能正在闹脾气，明确指令优先 */
+    say(line);
+    return line;
   } finally {
     aiBusy = false;
   }
@@ -674,6 +678,7 @@ function startApi() {
           on: aiOn,
           withinHours: settings.withinActiveHours(new Date()),
           lastCommentMsAgo: lastComment ? Date.now() - lastComment : null,
+          lastError: lastAiError,
           awayMs: Date.now() - lastCursorMove
         },
         idleForMs: Date.now() - lastInteract,
@@ -710,7 +715,8 @@ function startApi() {
         res.end('{"ok":false,"reason":"AI 评论未开启或未填 Key，右键桌宠 → 设置"}');
         return;
       }
-      comment().then(r => res.end(JSON.stringify({ ok: !!r, result: r })));
+      comment().then(r => res.end(JSON.stringify(
+        r ? { ok: true, result: r } : { ok: false, reason: lastAiError || '请求失败' })));
       return;
     }
     if (req.method === 'POST' && req.url === '/walk') {
@@ -776,8 +782,10 @@ ipcMain.handle('settings:test', async () => {
   if (!settings.apiKey()) return { ok: false, reason: '还没填 API Key' };
   if (!settings.load().comment.enabled) return { ok: false, reason: 'AI 评论没打开' };
   const r = await comment();
-  return r ? { ok: true, result: r } : { ok: false, reason: '请求失败,看终端日志' };
+  return r ? { ok: true, result: r } : { ok: false, reason: lastAiError || '请求失败' };
 });
+
+ipcMain.handle('settings:models', () => deepseek.listModels());
 
 ipcMain.handle('settings:openFolder', () => shell.showItemInFolder(settings.configPath()));
 

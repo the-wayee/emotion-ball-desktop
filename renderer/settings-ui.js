@@ -111,6 +111,7 @@
   $('save').addEventListener('click', async () => {
     cfg = await api.save(collect());
     render();
+    refreshModels();
     toast('已保存,<b>立即生效</b>', 'ok');
   });
 
@@ -127,7 +128,23 @@
     else toast(`没成功：<b>${esc((r && r.reason) || '未知原因')}</b>`, 'err');
   });
 
-  $('refresh').addEventListener('click', refreshProbe);
+  /* 模型清单：从 /models 拉真实可用的填进 datalist。
+   * 用 input + datalist 而不是 select —— 拉取失败时仍能手动输入，不至于卡死 */
+  async function refreshModels() {
+    const ids = await api.models();
+    const dl = $('modelList');
+    dl.innerHTML = '';
+    for (const id of ids) {
+      const o = document.createElement('option');
+      o.value = id;
+      dl.appendChild(o);
+    }
+    $('modelHint').textContent = ids.length
+      ? '账号可用：' + ids.join('、')
+      : '拉不到模型列表(Key 不对或网络不通),可以手动填';
+  }
+
+  $('refresh').addEventListener('click', () => { refreshProbe(); refreshModels(); });
   $('openFolder').addEventListener('click', () => api.openFolder());
 
   window.addEventListener('keydown', e => {
@@ -139,5 +156,6 @@
     cfg = await api.get();
     render();
     refreshProbe();
+    if (cfg.deepseek.apiKey) refreshModels();
   })();
 })();

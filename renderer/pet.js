@@ -111,6 +111,8 @@
     if (over === hovering) return;
     hovering = over;
     window.pet.hover(over);                     /* 主进程据此开关 ignoreMouseEvents */
+    hov.t = over ? 1.07 : 1;                    /* 被碰到：整体轻轻鼓一下 */
+    if (over) window.pet.react('hover');        /* 表情/台词由主进程挑，带冷却 */
   });
 
   /* ---------------- 拖拽 / 点击 ----------------
@@ -136,8 +138,8 @@
     if (!drag.on) return;
     drag.on = false;
     window.pet.dragEnd();
-    /* 位移不超过 6px 才算点击 —— 否则拖一下就会转圈 */
-    if (drag.moved <= 6) ball.spin(1);
+    /* 位移不超过 6px 才算点击 —— 否则拖一下就会触发对话 */
+    if (drag.moved <= 6) window.pet.react('click');
     hovering = false;                           /* 强制下一次 mousemove 重新判定 */
   }
 
@@ -147,7 +149,7 @@
   window.addEventListener('dblclick', function (e) {
     if (!isOverBall(e.clientX, e.clientY)) return;
     ball.burst(28);
-    window.pet.poke();
+    window.pet.react('delight');
   });
 
   window.addEventListener('contextmenu', function (e) {
@@ -175,6 +177,7 @@
    * 这样不用改引擎一行代码，也不会和引擎自己的 SVG 变换打架。 */
 
   var sq = { x: 0, v: 0, t: 0 };   /* x > 0 压扁，x < 0 拉长 */
+  var hov = { x: 1, v: 0, t: 1 };  /* 悬停整体缩放，和压扁共用同一个 transform */
 
   function springStep(s, w, z, dt) {
     var n = Math.max(1, Math.ceil(dt / (1 / 240)));
@@ -201,10 +204,15 @@
     var dt = lastT ? Math.min(0.05, Math.max(0.001, (t - lastT) / 1000)) : 1 / 60;
     lastT = t;
     springStep(sq, 26, 0.34, dt);               /* 欠阻尼 → 回弹带余震 */
+    springStep(hov, 19, 0.62, dt);              /* 悬停：略微欠阻尼，鼓起来有点 Q 弹 */
     var v = Math.max(-0.42, Math.min(0.5, sq.x));
-    if (Math.abs(v) < 0.0008) { petEl.style.transform = ''; return; }
-    /* 压扁时横向撑开，粗略保体积 */
-    petEl.style.transform = 'scaleX(' + (1 + v * 0.30).toFixed(4) +
+    var h = hov.x;
+    if (Math.abs(v) < 0.0008 && Math.abs(h - 1) < 0.0008) {
+      if (petEl.style.transform) petEl.style.transform = '';
+      return;
+    }
+    /* 压扁时横向撑开，粗略保体积；悬停缩放叠在外层，锚点同为球底 */
+    petEl.style.transform = 'scale(' + h.toFixed(4) + ') scaleX(' + (1 + v * 0.30).toFixed(4) +
                             ') scaleY(' + (1 - v * 0.34).toFixed(4) + ')';
   })(0);
 

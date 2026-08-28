@@ -13,6 +13,7 @@
 const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const http = require('http');
+const REACT = require('./reactions');
 
 const WIN_W = 280;
 const WIN_H = 240;
@@ -61,6 +62,12 @@ let behaveNext = 0;                      /* 下次自发行为的时刻 */
 let tempBackAt = 0;                      /* 临时表情回落到待机的时刻 */
 let curEmotion = IDLE_ID;
 let walk = null;                         /* { dir, t0, hops, x0, y0 } */
+
+/* ---- 交互反应状态 ---- */
+let clickN = 0;                          /* 连击计数 */
+let lastClickAt = 0;
+let hoverNext = 0;                       /* 悬停反应冷却 */
+const lastPick = new Map();              /* 每个池上次抽中的下标，避免连续重复 */
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -222,10 +229,69 @@ function stopWalk() {
  * 否则 _checkIdle 每帧都会把非 '02'/'00' 的表情强行拉回待机，
  * 这里设的"好奇""散步"活不过一帧。生命周期由这一套独占。 */
 
-function setEmotion(id, holdMs) {
+function setEmotion(id, holdMs, tips) {
   curEmotion = id;
-  send('emotion', { emotionId: id, auto: true });
+  /* 带 tips 时走完整 AI 协议格式，渲染进程那边会转成气泡 */
+  send('emotion', tips ? { emotionId: id, tips: tips } : { emotionId: id, auto: true });
   tempBackAt = holdMs ? Date.now() + holdMs : 0;
+}
+
+/* ---------------- 交互反应 ----------------
+ * 罐头台词和以后大模型生成的台词走同一条管道：
+ * 挑一条 → setEmotion(id, hold, text) → {emotionId, tips} → handleAIMessage */
+
+function pick(pool, key) {
+  if (!pool || !pool.length) return null;
+  if (pool.length === 1) return pool[0];
+  const last = lastPick.get(key);
+  let i;
+  do { i = Math.floor(Math.random() * pool.length); } while (i === last);
+  lastPick.set(key, i);
+  return pool[i];
+}
+
+/** 台词长度决定停留时长，和渲染进程的气泡计时用同一个公式 */
+function holdFor(text) {
+  return text ? Math.min(7000, Math.max(2400, text.length * 240)) : 2200;
+}
+
+function say(r) {
+  if (!r) return;
+  const hold = holdFor(r.text);
+  setEmotion(r.id, hold, r.text || null);
+  /* 说话期间别让自发行为插队 */
+  behaveNext = Date.now() + hold + rand(4000, 9000);
+}
+
+function react(kind) {
+  const now = Date.now();
+  const wasSleeping = phase === 'sleep';
+
+  if (kind === 'hover') {
+    /* 冷却 + 不打断正在说的话：鼠标扫来扫去不该让它一直叨叨 */
+    if (now < hoverNext) return;
+    if (tempBackAt && now < tempBackAt) return;
+    hoverNext = now + rand(7000, 12000);
+    wake();
+    stopWalk();
+    say(wasSleeping ? pick(REACT.wakeUp, 'wake') : pick(REACT.hover, 'hover'));
+    return;
+  }
+
+  wake();
+  stopWalk();
+
+  if (kind === 'delight') { say(pick(REACT.delight, 'delight')); return; }
+
+  /* 点击：6s 内的连击累计，越戳越不耐烦 */
+  if (now - lastClickAt > 6000) clickN = 0;
+  clickN += 1;
+  lastClickAt = now;
+  hoverNext = now + 6000;                /* 刚聊过就别再触发悬停反应 */
+
+  if (wasSleeping) { say(pick(REACT.wakeUp, 'wake')); return; }
+  const tier = clickN <= 2 ? 'calm' : clickN <= 5 ? 'bored' : 'angry';
+  say(pick(REACT.click[tier], 'click:' + tier));
 }
 
 function pickBehaviour(now) {
@@ -491,6 +557,8 @@ ipcMain.on('drag:start', () => {
 ipcMain.on('drag:end', () => { drag = null; lastInteract = Date.now(); });
 
 ipcMain.on('poke', () => { wake(); stopWalk(); });
+
+ipcMain.on('react', (_e, kind) => react(kind));
 
 ipcMain.on('menu', () => {
   Menu.buildFromTemplate([

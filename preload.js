@@ -24,5 +24,6 @@ contextBridge.exposeInMainWorld('pet', {
   dragStart: () => ipcRenderer.send('drag:start'),
   dragEnd: () => ipcRenderer.send('drag:end'),
   poke: () => ipcRenderer.send('poke'),
+  react: kind => ipcRenderer.send('react', kind),
   menu: () => ipcRenderer.send('menu')
 });

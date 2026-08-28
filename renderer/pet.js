@@ -17,34 +17,33 @@
   var petEl = document.getElementById('pet');
   var bubbleEl = document.getElementById('bubble');
 
+  /* 球体底部在容器高度中的占比（viewBox -15 -15 259 259 内实测）——
+   * 压缩形变的锚点，设错会变成"悬空压扁" */
+  var BALL_BOTTOM = { blob: 94, gem: 94, wedge: 90.2 };
+
   var shape = 'blob';
   var sketch = false;
   var curEmotion = '02';
   var ball = null;
 
   /* ---------------- 散步表情（自定义段 50+）----------------
-   * 身体左右摇摆的 period 必须是单跳时长的 2 倍：一跳偏左、下一跳偏右，
-   * 摇摆才跟落地节奏对得上。hopMs 由主进程在散步开始时下发，
-   * 这里按它重新注册，避免两边各写一个常数写歪。 */
+   * 摇摆不再挂在跳跃节奏上：物理版每一跳的滞空时长都在衰减，
+   * 拿固定 period 的正弦去对是对不上的。跳跃的节奏感交给压缩形变，
+   * 这里只留一点慢速侧倾当"走路的松弛感"。 */
 
-  function registerWalk(hopMs) {
-    EmotionBall.config.register({
-      id: '50', name: '散步', group: 'custom',
-      desc: '一弹一弹地挪动，身体随落地节奏轻轻摇摆',
-      en: { name: 'Strolling', desc: 'Hops along, body swaying with each landing' },
-      transition: 260,
-      pool: [2, 11, 17, 19],          /* 笑眼池 */
-      poolMs: [1800, 3200],
-      blinkMs: [2600, 5200],
-      body: { breathe: 0.016 },
-      anims: [
-        { target: 'body', prop: 'rotate', type: 'sine', amp: 5, period: (hopMs || 480) * 2 },
-        { target: 'eyes', prop: 'lookY', type: 'sine', amp: 1.8, period: hopMs || 480 }
-      ]
-    });
-  }
-
-  registerWalk(480);
+  EmotionBall.config.register({
+    id: '50', name: '散步', group: 'custom',
+    desc: '一弹一弹地挪动，落地压扁再弹回来',
+    en: { name: 'Strolling', desc: 'Hops along, squashing on each landing' },
+    transition: 260,
+    pool: [2, 11, 17, 19],          /* 笑眼池 */
+    poolMs: [1800, 3200],
+    blinkMs: [2600, 5200],
+    body: { breathe: 0.016 },
+    anims: [
+      { target: 'body', prop: 'rotate', type: 'sine', amp: 3.5, period: 1500 }
+    ]
+  });
 
   /* ---------------- 实例化 ---------------- */
 
@@ -55,8 +54,10 @@
       emotion: curEmotion,
       shape: shape,
       idle: false,          /* 生命周期交给主进程，见文件头注释 */
-      lite: false           /* 保留彩带与撒花 */
+      lite: false,          /* 保留彩带与撒花 */
+      eyeScale: 1.2         /* 球缩到 100px，眼睛按集成指南补一点占比保证可读 */
     });
+    petEl.style.transformOrigin = '50% ' + (BALL_BOTTOM[shape] || 94) + '%';
     if (sketch) ball.setStyle({ sketch: 1 });
 
     ball.on('change', function (e) { curEmotion = e.id; });
@@ -164,9 +165,48 @@
 
   window.pet.onWalk(function (w) {
     if (!w.active) return;                      /* 结束由主进程另发 emotion 收尾 */
-    registerWalk(w.hopMs);                      /* 摇摆节奏对齐本次跳跃时长 */
     ball.setEmotion('50');
   });
+
+  /* ---------------- 压缩形变 ----------------
+   * 主进程只发事件（蓄力 / 起跳 / 落地冲量 / 收尾），形变本身在这里跑一个
+   * 欠阻尼弹簧：落地给一记速度冲量 → 压扁 → 回弹过冲 → 余震衰减。
+   * 作用在容器的 CSS transform 上，锚点设在球底（见 BALL_BOTTOM），
+   * 这样不用改引擎一行代码，也不会和引擎自己的 SVG 变换打架。 */
+
+  var sq = { x: 0, v: 0, t: 0 };   /* x > 0 压扁，x < 0 拉长 */
+
+  function springStep(s, w, z, dt) {
+    var n = Math.max(1, Math.ceil(dt / (1 / 240)));
+    var h = dt / n;
+    for (var i = 0; i < n; i++) {
+      s.v += (w * w * (s.t - s.x) - 2 * z * w * s.v) * h;
+      s.x += s.v * h;
+    }
+  }
+
+  window.pet.onPhys(function (e) {
+    if (e.type === 'crouch') { sq.t = 0.34; }                       /* 蓄力：慢慢压下去 */
+    else if (e.type === 'launch') { sq.t = 0; sq.v -= 7; }          /* 蹬地：向上拉长 */
+    else if (e.type === 'land') {
+      sq.t = 0;
+      /* 冲量按落地速度给，封顶避免第一跳压成饼 */
+      sq.v += Math.min(1, e.impact / 430) * 15;
+    } else if (e.type === 'settle') { sq.t = 0; }
+  });
+
+  var lastT = 0;
+  (function squashLoop(t) {
+    requestAnimationFrame(squashLoop);
+    var dt = lastT ? Math.min(0.05, Math.max(0.001, (t - lastT) / 1000)) : 1 / 60;
+    lastT = t;
+    springStep(sq, 26, 0.34, dt);               /* 欠阻尼 → 回弹带余震 */
+    var v = Math.max(-0.42, Math.min(0.5, sq.x));
+    if (Math.abs(v) < 0.0008) { petEl.style.transform = ''; return; }
+    /* 压扁时横向撑开，粗略保体积 */
+    petEl.style.transform = 'scaleX(' + (1 + v * 0.30).toFixed(4) +
+                            ') scaleY(' + (1 - v * 0.34).toFixed(4) + ')';
+  })(0);
 
   window.pet.onAct(function (act) {
     if (act === 'spin') ball.spin(1);

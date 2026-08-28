@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('pet', {
   onSketch: cb => on('sketch', cb),
   onWalk: cb => on('walk', cb),
   onAct: cb => on('act', cb),
+  onPhys: cb => on('phys', cb),
 
   /* 渲染进程 → 主进程 */
   ready: payload => ipcRenderer.send('ready', payload),

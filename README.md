@@ -31,7 +31,7 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 | 单击 | 自旋甩彩带 |
 | 双击 | 撒花 |
 | 右键 | 表情菜单 |
-| 托盘图标 | 表情 / 形态(blob·wedge·gem)/ 线稿 / 回到右下角 / 退出 |
+| 托盘图标 | 散步 / 自发行为开关 / 表情 / 形态 / 线稿 / 回到右下角 / 退出 |
 | 移动鼠标 | 全局注视跟随(主进程轮询光标,球外也跟) |
 | 什么都不做 | 它自己会散步、好奇张望、发呆、伸懒腰 |
 
@@ -39,9 +39,33 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 
 ## 它自己会动
 
-**散步**:一弹一跳地横向移动,单跳 480ms / 44px / 跳高 30px,身体随落地节奏左右摇摆。
+**散步(物理版)**:不是等高等距的连续弹跳,而是真的做积分 ——
+
+```
+下蹲蓄力 → 蹬地 → 落体 → 落地(垂直速度 ×0.58) → 越弹越低 → 停住 → 歇 0.3~0.7s → 再蹬
+```
+
+一次「散步」= 若干次蹬地,每次蹬地内部是一串自然衰减的弹跳。撞到屏幕边缘会反向弹开。
 位移做在**窗口层**而不是 SVG 层 —— 引擎的 `ball.bounce()` 是球在窗口内原地弹,
-两者叠加会变成双重运动,所以散步期间不调 `bounce()`。走到屏幕边缘会自动截断跳数或掉头。
+两者叠加会变成双重运动,所以散步期间不调 `bounce()`。
+
+**压缩形变(squash & stretch)**:蓄力压扁 → 蹬地拉长 → 落地压扁 → 回弹过冲 → 余震收敛。
+主进程只发事件(蓄力 / 起跳 / 落地冲量 / 收尾),形变本身是渲染进程里一个**欠阻尼弹簧**,
+作用在容器的 CSS transform 上,锚点按形态设在**球底**(blob/gem 94%、wedge 90.2%),
+不然会变成"悬空压扁"。这样不用改引擎一行代码,也不和引擎自己的 SVG 变换打架。
+
+实测(`tools/probe-squash.mjs` 读 computed transform):
+
+| 时刻 | scaleY | 状态 |
+|---|---|---|
+| 0.24s | 0.849 | 蓄力压扁 15% |
+| 0.36s | 1.060 | 蹬地拉长 |
+| 0.72s | 0.880 | 第一次落地 |
+| 0.96s | 0.930 | 第二次落地(冲量已衰减) |
+| 1.2s+ | →1.000 | 余震收敛 |
+
+调参:物理在 [main.js](main.js) 顶部常量(`GRAV` / `REST` / `LAUNCH_V` / `VX_DAMP`),
+形变弹簧在 [renderer/pet.js](renderer/pet.js) 的 `springStep(sq, 26, 0.34, dt)`。
 
 **三段生命周期**(按距上次交互的时长):
 
@@ -69,8 +93,8 @@ curl -X POST http://127.0.0.1:17817/emotion \
 # 查全部表情
 curl http://127.0.0.1:17817/emotions
 
-# 让它散步(dir: left|right,省略则随机;hops 默认 6)
-curl -X POST http://127.0.0.1:17817/walk -d '{"dir":"left","hops":8}'
+# 让它散步(dir: left|right,省略则随机;launches = 蹬几次,默认 4)
+curl -X POST http://127.0.0.1:17817/walk -d '{"dir":"left","launches":3}'
 
 # 查当前状态(阶段 / 表情 / 是否在走 / 窗口位置)
 curl http://127.0.0.1:17817/state
@@ -90,8 +114,10 @@ main.js              主进程:透明置顶窗 / 光标轮询(注视+拖拽)/ �
 preload.js           contextBridge 安全桥(contextIsolation 开启)
 renderer/
   index.html         按 数据→配置→渲染→驱动 顺序加载引擎四件套
-  pet.js             命中检测 / 拖拽点击判定 / 接 AI 消息
-  pet.css            全透明壳 + 气泡
+  pet.js             命中检测 / 拖拽点击判定 / 压缩形变弹簧 / 接 AI 消息
+  pet.css            全透明壳 + 气泡(窗口 280×240,球 100×100)
+tools/
+  probe-squash.mjs   读渲染进程 computed transform,调形变手感用
 vendor/emotion-ball/ 引擎四件套(从上游仓库复制,含 LICENSE 与 NOTICE)
 ```
 

@@ -350,7 +350,40 @@ npm run hooks:remove     # 撤掉
 | | 动作 |
 |---|---|
 | **Claude Code** | 往 `~/.claude/settings.json` 的 7 个事件各加一条 hook,原有配置原样保留 |
-| **Codex** | 生成包装脚本到应用数据目录,把 `notify` 指过去 |
+| **Codex** | 写 `~/.codex/hooks.json`(5 个事件)+ 生成 notify 包装脚本 |
+
+### Codex 的坑(都是实测踩出来的)
+
+Codex 也有 hooks 系统,**和 Claude Code 几乎同构** —— 事件名、`hook_event_name`
+字段名、`{matcher, hooks:[...]}` 结构全都一样。但有四个差异:
+
+| | 差异 | 后果 |
+|---|---|---|
+| `async` | **不支持** | 带 `async: true` 的 hook 被**整个跳过**,日志里只有一行 `async hooks are not supported yet` |
+| `timeout` | 会被 clamp 到 3s | 写多大都没用 |
+| `matcher` | **不能省** | 省掉之后一个事件都不触发 |
+| 沙箱 | hook 跑在只读沙箱里 | 回环网络可用,**写文件会失败** |
+
+还有信任门槛:
+
+```
+New hook - review required
+Modified since last trusted - review required
+1 hook needs review before it can run.
+```
+
+装好 / 改动 hooks.json 之后,要在 Codex 里 **`/settings` → Hooks** 审核一次才会触发。
+**改一次就要重新审核一次。**
+
+所以安装器**两条路一起装**,各补各的短板:
+
+| | 事件 | 信任门槛 | 用来做什么 |
+|---|---|---|---|
+| `hooks.json` | 齐全,含 `UserPromptSubmit` | 有,要审核 | **任务开始**「来活了」|
+| `config.toml` 的 `notify` | 只有 `agent-turn-complete` | 无,装上即生效 | **任务结束**「干完了」|
+
+Codex 的 `notify` 没有"开始"事件 —— 这就是只配 `notify` 时收不到「来活了」的原因,
+不是兼容性问题。
 
 三条原则:
 

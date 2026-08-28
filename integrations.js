@@ -62,6 +62,7 @@ function setUserData(dir) { if (dir) userDataDir = dir; }
 
 const claudeSettings = () => path.join(os.homedir(), '.claude', 'settings.json');
 const codexConfig = () => path.join(os.homedir(), '.codex', 'config.toml');
+const codexHooks = () => path.join(os.homedir(), '.codex', 'hooks.json');
 const statePath = () => path.join(userDataDir, 'integrations.json');
 const wrapperPath = () =>
   path.join(userDataDir, process.platform === 'win32' ? 'codex-notify.cmd' : 'codex-notify.sh');
@@ -170,9 +171,62 @@ function claudeUninstall() {
 }
 
 /* ---------------- Codex ----------------
+ * 两条路一起用，各补各的短板：
+ *
+ *   ~/.codex/hooks.json  —— 事件齐全（和 Claude Code 同构，字段名都叫
+ *     hook_event_name），能拿到"任务开始"。但有信任门槛：改动过的 hook
+ *     会被静默跳过，要在 Codex 里 /settings → Hooks 审核一次。
+ *   config.toml 的 notify —— 只有 agent-turn-complete 一个事件（没有"开始"），
+ *     但没有信任门槛，装上就生效。用来兜住"任务结束"。
+ *
+ * 实测要点（都是踩出来的）：
+ *   - Codex 不支持 async，带 async:true 的 hook 会被整个跳过，
+ *     日志里只有一行 "async hooks are not supported yet"
+ *   - timeout 会被 clamp 到 3s
+ *   - matcher 不能省，省了一个事件都不触发
+ *   - hook 跑在只读沙箱里：回环网络可用，写文件会失败
+ *
  * notify 只能配一个程序，所以生成一个包装脚本：先把参数原样转给
  * 原来的通知程序，再通知桌宠。原程序不是硬编码的 —— 安装时从
  * config.toml 里读出来存进 integrations.json，卸载时原样还回去。 */
+
+/* 只挑有用的，PreToolUse / PostToolUse 每次工具调用都触发，太吵 */
+const CODEX_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PermissionRequest', 'Stop', 'SessionEnd'];
+
+function codexHookEntry() {
+  const h = { type: 'command', command: hookCommand(), timeout: 3 };  /* 不能加 async */
+  return { matcher: '', hooks: [h] };
+}
+
+function readHooksFile() {
+  try { return JSON.parse(fs.readFileSync(codexHooks(), 'utf8')); } catch (e) { return {}; }
+}
+
+function codexHooksInstalled() {
+  const doc = readHooksFile();
+  const h = (doc && doc.hooks) || {};
+  return CODEX_EVENTS.every(ev => (h[ev] || []).some(isOurs));
+}
+
+function writeCodexHooks(remove) {
+  const file = codexHooks();
+  const doc = readHooksFile();
+  doc.hooks = doc.hooks || {};
+  for (const ev of Object.keys(doc.hooks)) {
+    doc.hooks[ev] = (doc.hooks[ev] || []).filter(g => !isOurs(g));
+    if (!doc.hooks[ev].length) delete doc.hooks[ev];
+  }
+  if (!remove) for (const ev of CODEX_EVENTS) {
+    doc.hooks[ev] = (doc.hooks[ev] || []).concat([codexHookEntry()]);
+  }
+  if (fs.existsSync(file)) backup(file);
+  if (remove && !Object.keys(doc.hooks).length) {
+    fs.rmSync(file, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(doc, null, 2) + '\n');
+}
 
 const NOTIFY_RE = /^\s*notify\s*=\s*\[[^\]\n]*\]\s*$/m;
 
@@ -239,13 +293,19 @@ function codexStatus() {
   let notify;
   try { notify = parseNotify(fs.readFileSync(file, 'utf8')); }
   catch (e) { return { available: false, installed: false, reason: '读取失败' }; }
-  const ours = !!(notify && notify[0] === wrapperPath());
+  const notifyOurs = !!(notify && notify[0] === wrapperPath());
+  const hooksOurs = codexHooksInstalled();
   return {
     available: true,
-    installed: ours,
+    installed: notifyOurs && hooksOurs,
+    partial: (notifyOurs || hooksOurs) && !(notifyOurs && hooksOurs),
+    notify: notifyOurs,
+    hooks: hooksOurs,
+    /* hooks 装上还要在 Codex 里审核一次才会真正生效，界面要提示 */
+    needsTrust: hooksOurs,
     file,
     /* 装上之后原来的通知程序还在不在，界面上要说清楚 */
-    forwarding: ours ? (readState().codexOriginalNotify || []).length > 0 : false
+    forwarding: notifyOurs ? (readState().codexOriginalNotify || []).length > 0 : false
   };
 }
 
@@ -265,6 +325,9 @@ function codexInstall() {
   writeState(Object.assign(readState(), { codexOriginalNotify: original }));
   writeWrapper(original);
 
+  try { writeCodexHooks(false); }
+  catch (e) { return { ok: false, reason: '写 hooks.json 失败：' + e.message }; }
+
   backup(file);
   const line = `notify = [${JSON.stringify(wrapper)}]`;
   const next = NOTIFY_RE.test(text)
@@ -275,7 +338,7 @@ function codexInstall() {
   } catch (e) {
     return { ok: false, reason: '写入失败：' + e.message };
   }
-  return { ok: true, forwarding: original.length > 0, original };
+  return { ok: true, forwarding: original.length > 0, original, needsTrust: true };
 }
 
 function codexUninstall() {
@@ -284,6 +347,8 @@ function codexUninstall() {
   let text;
   try { text = fs.readFileSync(file, 'utf8'); }
   catch (e) { return { ok: false, reason: '读取失败：' + e.message }; }
+
+  try { writeCodexHooks(true); } catch (e) { /* hooks.json 清理失败不阻断 */ }
 
   const st = readState();
   const original = st.codexOriginalNotify || [];

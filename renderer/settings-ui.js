@@ -182,7 +182,11 @@
       else if (v.installed) {
         note = '已接入';
         if (key === 'claude') note += `　${v.total} 个事件`;
-        if (key === 'codex' && v.forwarding) note += '　原通知程序已保留转发';
+        if (key === 'codex') {
+          if (v.forwarding) note += '　原通知程序已保留转发';
+          /* Codex 的 hook 有信任门槛，不说清楚用户会以为坏了 */
+          note += '<br>还要在 Codex 里 <b>/settings → Hooks</b> 审核一次才会触发';
+        }
       } else if (v.partial) note = `只接了一部分(${v.events}/${v.total}),点一下补齐`;
       else note = esc(meta.file);
 

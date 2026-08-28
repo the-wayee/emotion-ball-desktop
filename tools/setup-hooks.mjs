@@ -47,7 +47,11 @@ if (cmd === 'status') {
   }
   show();
   if (cmd === 'install') {
-    console.log('提示：Claude Code 需要重开一个会话（或打开一次 /hooks）才会加载新 hook。\n');
+    console.log('提示：');
+    console.log('  · Claude Code —— 重开一个会话（或打开一次 /hooks）才会加载新 hook。');
+    console.log('  · Codex —— hooks 有信任门槛，要在 Codex 里 /settings → Hooks 审核一次');
+    console.log('    才会触发（显示「New hook - review required」）。任务结束的提醒走');
+    console.log('    notify，无需审核，装上即生效。\n');
   }
 } else {
   console.log('用法: node tools/setup-hooks.mjs [status|install|remove] [claude|codex]');

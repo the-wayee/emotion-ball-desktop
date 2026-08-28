@@ -5,3 +5,6 @@ dist/
 # 上游参考仓库（sam70361/emotion-ball 的独立 clone，不并入本项目）
 # 引擎文件已复制到 vendor/emotion-ball/，随该目录的 LICENSE 与 NOTICE 一并分发
 /emotion-ball/
+
+# 本地配置：内含 DeepSeek API key，绝不提交
+config.local.json

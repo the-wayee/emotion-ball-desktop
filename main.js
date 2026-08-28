@@ -14,6 +14,8 @@ const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } = require
 const path = require('path');
 const http = require('http');
 const REACT = require('./reactions');
+const activity = require('./activity');
+const deepseek = require('./deepseek');
 
 const WIN_W = 280;
 const WIN_H = 240;
@@ -35,6 +37,9 @@ const CROUCH_MS = 150;    /* 蹬地前的下蹲蓄力 */
 /* ---- 生命周期分段（距上次交互的时长）---- */
 const ACTIVE_MS = 45000;    /* 45s 内算活跃期，动作频繁 */
 const SLEEP_MS = 150000;    /* 150s 后睡觉 */
+
+const AI_TICK_MS = 20000;   /* 多久查一次「你在干嘛」（查本身很便宜，45ms）*/
+const AWAY_MS = 5 * 60 * 1000;  /* 光标这么久没动 = 人不在，别自言自语 */
 
 const SULK_AT = 8;          /* 连击到第几下彻底不理人 */
 const SULK_MS = 10000;      /* 闹脾气时长：期间点击 / 悬停一律无响应 */
@@ -71,6 +76,16 @@ let clickN = 0;                          /* 连击计数 */
 let lastClickAt = 0;
 let hoverNext = 0;                       /* 悬停反应冷却 */
 let sulkUntil = 0;                       /* 闹脾气到期时刻，之前一切交互无响应 */
+
+/* ---- AI 评论 ---- */
+let aiOn = true;
+let aiBusy = false;
+let aiTimer = null;
+let lastComment = 0;
+let lastActKey = null;                   /* 上次快照的活动分类，变了就值得说一句 */
+let recentSaid = [];                     /* 最近说过的话，塞进提示里避免复读 */
+let lastCursorMove = Date.now();
+let lastCursorPt = { x: -1, y: -1 };
 const lastPick = new Map();              /* 每个池上次抽中的下标，避免连续重复 */
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -370,13 +385,63 @@ function tickBehaviour(now) {
   if (now >= behaveNext) pickBehaviour(now);
 }
 
-function wake() {
+function wake(silent) {
   lastInteract = Date.now();
   if (phase === 'sleep') {
     phase = 'active';
-    setEmotion('01');              /* 唤醒序列，播完自动切回 '02' */
+    /* silent：AI 主动开口时用 —— 播 '01' 唤醒序列会马上被台词表情盖掉，
+     * 白闪一下反而难看 */
+    if (!silent) setEmotion('01');
     behaveNext = Date.now() + rand(8000, 16000);
   }
+}
+
+/* ---------------- AI 评论 ----------------
+ * 周期性看一眼「你在干嘛」，交给 DeepSeek 换一句话回来。
+ * 拿到的 { id, text } 和 reactions.js 里的罐头台词同构，
+ * 所以直接走 say() —— 底下还是 {emotionId, tips} → handleAIMessage 那条管道。 */
+
+/** 真正发起一次评论。act 可传入已取好的快照，避免重复采样 */
+async function comment(act) {
+  if (aiBusy || !emotions.length) return null;
+  aiBusy = true;
+  try {
+    if (!act) act = await activity.snapshot();
+    lastActKey = act.key;
+    const r = await deepseek.comment(act, emotions, recentSaid);
+    if (!r) return null;
+    lastComment = Date.now();
+    recentSaid.push(r.text);
+    if (recentSaid.length > 5) recentSaid.shift();
+    wake(true);                 /* 睡着也醒过来说，但不播 '01' 免得白闪 */
+    stopWalk();
+    say(r);
+    return r;
+  } finally {
+    aiBusy = false;
+  }
+}
+
+async function tickAI() {
+  if (!aiOn || aiBusy || !deepseek.isReady()) return;
+  const now = Date.now();
+
+  /* 人不在就别自言自语 */
+  if (now - lastCursorMove > AWAY_MS) return;
+  /* 闹脾气 / 正在走 / 话还没说完，都不插嘴。睡着倒是可以醒来说一句 */
+  if (now < sulkUntil || walk) return;
+  if (tempBackAt && now < tempBackAt) return;
+
+  const c = deepseek.loadConfig();
+  if (now - lastComment < c.minGapMs) return;   /* 硬下限，防止切来切去烧额度 */
+
+  const act = await activity.snapshot();
+  const changed = lastActKey !== null && act.key !== lastActKey;
+  lastActKey = act.key;
+  /* 活动类别变了就值得马上说一句，否则等到 everyMs */
+  if (!changed && now - lastComment < c.everyMs) return;
+
+  await comment(act);
 }
 
 /* ---------------- 光标轮询：注视 + 拖拽 + 行为 ---------------- */
@@ -388,6 +453,10 @@ function startPoll() {
     const dt = lastPoll ? clamp((now - lastPoll) / 1000, 0.001, 0.05) : 1 / 60;
     lastPoll = now;
     const p = screen.getCursorScreenPoint();
+    if (p.x !== lastCursorPt.x || p.y !== lastCursorPt.y) {
+      lastCursorPt = p;
+      lastCursorMove = now;
+    }
 
     if (drag) {
       win.setPosition(
@@ -464,6 +533,16 @@ function refreshTrayMenu() {
       click: () => { autoBehave = !autoBehave; if (!autoBehave) stopWalk(); refreshTrayMenu(); }
     },
     { type: 'separator' },
+    deepseek.isReady()
+      ? {
+          label: 'AI 评论（DeepSeek）',
+          type: 'checkbox',
+          checked: aiOn,
+          click: () => { aiOn = !aiOn; refreshTrayMenu(); }
+        }
+      : { label: 'AI 评论：未配置 key', enabled: false },
+    { label: '现在让它说一句', enabled: deepseek.isReady(), click: () => comment() },
+    { type: 'separator' },
     { label: '表情', submenu: emotionSubmenus() },
     {
       label: '形态',
@@ -533,6 +612,12 @@ function startApi() {
         autoBehave: autoBehave,
         clicks: clickN,
         sulkMsLeft: Math.max(0, sulkUntil - Date.now()),
+        ai: {
+          ready: deepseek.isReady(),
+          on: aiOn,
+          lastCommentMsAgo: lastComment ? Date.now() - lastComment : null,
+          awayMs: Date.now() - lastCursorMove
+        },
         idleForMs: Date.now() - lastInteract,
         bounds: b
       }));
@@ -549,6 +634,21 @@ function startApi() {
       });
       return;
     }
+    /* 看看它以为你在干嘛（调分类规则用） */
+    if (req.method === 'GET' && req.url === '/activity') {
+      activity.snapshot().then(a => res.end(JSON.stringify(a)));
+      return;
+    }
+    /* 手动催一次评论，返回模型给的原样结果，便于排查 */
+    if (req.method === 'POST' && req.url === '/comment') {
+      if (!deepseek.isReady()) {
+        res.statusCode = 503;
+        res.end('{"ok":false,"reason":"未配置 DeepSeek key，见 config.example.json"}');
+        return;
+      }
+      comment().then(r => res.end(JSON.stringify({ ok: !!r, result: r })));
+      return;
+    }
     if (req.method === 'POST' && req.url === '/walk') {
       readBody(req, body => {
         let o = {};
@@ -562,7 +662,7 @@ function startApi() {
       return;
     }
     res.statusCode = 404;
-    res.end('{"ok":false,"hint":"GET /emotions | GET /state | POST /emotion | POST /walk"}');
+    res.end('{"ok":false,"hint":"GET /emotions | GET /state | GET /activity | POST /emotion | POST /walk | POST /comment"}');
   });
 
   apiServer.on('error', e => console.error('[api] 启动失败：', e.message));
@@ -615,11 +715,16 @@ app.whenReady().then(() => {
   createWindow();
   startPoll();
   startApi();
+  aiTimer = setInterval(tickAI, AI_TICK_MS);
+  if (!deepseek.isReady()) {
+    console.log('[deepseek] 未配置 key，AI 评论已关闭（复制 config.example.json 为 config.local.json 填入即可）');
+  }
 });
 
 app.on('window-all-closed', () => app.quit());
 
 app.on('before-quit', () => {
   if (pollTimer) clearInterval(pollTimer);
+  if (aiTimer) clearInterval(aiTimer);
   if (apiServer) apiServer.close();
 });

@@ -118,6 +118,58 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 > `{emotionId, tips}` → `handleAIMessage` → 表情 + 气泡,接大模型时
 > 只需把「挑一条」换成「生成一条」。
 
+## AI 评论(DeepSeek)
+
+它会周期性看一眼你在用什么应用,把「在写代码 / 在玩游戏 / 在看视频」这类**分类**
+交给 DeepSeek,换回一句评论,用表情 + 气泡说出来。
+
+### 配置
+
+```bash
+cp config.example.json config.local.json
+# 编辑 config.local.json 填入 apiKey(或设环境变量 DEEPSEEK_API_KEY)
+```
+
+`config.local.json` 已在 `.gitignore` 里,key 不会进仓库。**没配 key 时整个功能静默关闭**,
+不报错也不打扰。
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `apiKey` | — | DeepSeek key;也可用环境变量 `DEEPSEEK_API_KEY` |
+| `model` | `deepseek-chat` | |
+| `everyMs` | 600000 | 没别的事发生时,多久评论一次 |
+| `minGapMs` | 180000 | 两次调用的**硬下限**,防止切来切去烧额度 |
+
+### 什么时候会说话
+
+- 活动**分类变了**(写代码 → 玩游戏)→ 马上说一句,但受 `minGapMs` 约束;
+- 否则每 `everyMs` 一次。
+
+这几种情况一律不说:光标 5 分钟没动(人不在)、正在闹脾气、正在散步、上一句还没说完。
+睡着了倒是会醒过来说(但不播唤醒序列,免得白闪一下)。
+
+### 隐私
+
+发出去的**只有应用名和分类**,例如「用户现在在用:Code(看起来在写代码)」。
+**不读窗口标题** —— 那里面常有文件路径、文档名、聊天对象。想要更精准的评论可以自己加,
+但那是另一个量级的信息暴露,默认不开(见 [activity.js](activity.js) 文件头)。
+
+前台是桌宠自己时会沿用上一个已知应用,不然它会以为你一直在用它。
+
+### 成本
+
+system 提示(含 32 个表情清单)是固定的,DeepSeek 会自动命中上下文缓存。
+按默认 10 分钟一次算,一天约 140 次调用,量很小。
+
+### 调试
+
+```bash
+curl http://127.0.0.1:17817/activity      # 看它以为你在干嘛(调分类规则用)
+curl -X POST http://127.0.0.1:17817/comment   # 手动催一句,返回模型原样结果
+```
+
+托盘菜单里有「AI 评论」开关和「现在让它说一句」。
+
 ## AI 接口
 
 本地 HTTP,只绑 `127.0.0.1:17817`:
@@ -133,8 +185,14 @@ curl http://127.0.0.1:17817/emotions
 # 让它散步(dir: left|right,省略则随机;launches = 蹬几次,默认 4)
 curl -X POST http://127.0.0.1:17817/walk -d '{"dir":"left","launches":3}'
 
-# 查当前状态(阶段 / 表情 / 是否在走 / 窗口位置)
+# 查当前状态(阶段 / 表情 / 是否在走 / 连击 / AI 状态 / 窗口位置)
 curl http://127.0.0.1:17817/state
+
+# 看它以为你在干嘛
+curl http://127.0.0.1:17817/activity
+
+# 手动催一句 AI 评论
+curl -X POST http://127.0.0.1:17817/comment
 ```
 
 POST 的 body 原样转给引擎的 `handleAIMessage`,所以未知 ID / 坏 JSON / 缺字段
@@ -149,6 +207,9 @@ POST 的 body 原样转给引擎的 `handleAIMessage`,所以未知 ID / 坏 JSON
 ```
 main.js              主进程:透明置顶窗 / 光标轮询 / 行为调度 / 交互反应 / 托盘 / HTTP
 reactions.js         罐头台词与表情(纯数据)
+activity.js          你在干嘛:lsappinfo 取前台应用 + ps 取后台,关键词分类
+deepseek.js          DeepSeek 客户端:活动快照 → {emotionId, text}
+config.example.json  配置模板(复制成 config.local.json 填 key,已 gitignore)
 preload.js           contextBridge 安全桥(contextIsolation 开启)
 renderer/
   index.html         按 数据→配置→渲染→驱动 顺序加载引擎四件套

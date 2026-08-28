@@ -785,7 +785,17 @@ ipcMain.handle('settings:close', () => { if (setWin && !setWin.isDestroyed()) se
 
 ipcMain.on('menu', () => {
   Menu.buildFromTemplate([
-    { label: '散步一段', click: () => { wake(); startWalk(Math.random() < 0.5 ? -1 : 1, 4); } },
+    { label: '设置…', click: openSettings },
+    {
+      label: settings.apiKey() ? 'AI 评论（DeepSeek）' : 'AI 评论：还没填 Key',
+      type: 'checkbox',
+      checked: aiOn && settings.isReady(),
+      enabled: !!settings.apiKey(),
+      click: () => { settings.save({ comment: { enabled: !aiOn } }); applySettings(); }
+    },
+    { label: '现在让它说一句', enabled: settings.isReady(), click: () => comment() },
+    { type: 'separator' },
+    { label: '散步一段', click: () => { clearSulk(); wake(); startWalk(Math.random() < 0.5 ? -1 : 1, 4); } },
     { type: 'separator' },
     ...emotionSubmenus(),
     { type: 'separator' },

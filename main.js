@@ -169,6 +169,11 @@ function createWindow() {
 /* ---------------- 设置窗口 ---------------- */
 
 /* 位置存盘要节流：散步时窗口每帧都在动，每帧写文件会把磁盘打爆 */
+let falling = false;                     /* 松手后的自由落体，和散步共用物理 */
+let shakeNext = 0;                       /* 甩动抗议的冷却 */
+let shakeFlips = 0;                      /* 800ms 内的换向次数 */
+let shakeLastDir = 0;
+let shakeWindow = 0;
 let posSaveTimer = null;
 function savePosition() {
   if (posSaveTimer) return;
@@ -340,7 +345,52 @@ function stopWalk() {
   savePosition();
   send('walk', { active: false });
   send('phys', { type: 'settle' });
+  if (falling) {
+    falling = false;
+    say(pick(REACT.dropped, 'dropped'));   /* 摔完抱怨一句，别直接回待机 */
+    return;
+  }
   setEmotion(phase === 'sleep' ? SLEEP_ID : IDLE_ID);
+}
+
+/* ---------------- 松手掉落 ----------------
+ * 不另写一套物理：把当前离地高度塞进 walk，交给 stepWalk 跑 ——
+ * 重力、弹性衰减、落地冲量事件（压缩形变）那边都现成。
+ * left = 0 表示落地弹完就收，不再蹬地。 */
+
+function groundY(b) {
+  const wa = workAreaOf(b);
+  return wa.y + wa.height - WIN_H;
+}
+
+/** @returns {boolean} 是否真的进入了落体 */
+function startFall() {
+  if (!win || win.isDestroyed()) return false;
+  if (!settings.load().pet.dropFall) return false;
+  const b = win.getBounds();
+  const g = groundY(b);
+  if (b.y >= g - 8) return false;        /* 本来就贴着地，不用掉 */
+
+  falling = true;
+  walk = {
+    dir: 0, left: 0, stage: 'air', tStage: Date.now(), restMs: 0,
+    h: g - b.y, vh: 0, vx: 0, x: b.x, baseY: g
+  };
+  return true;
+}
+
+/** 拖拽中来回甩：800ms 内换向 4 次就抗议一句 */
+function checkShake(now, p) {
+  if (now > shakeWindow) { shakeWindow = now + 800; shakeFlips = 0; }
+  const dx = p.x - (shakeLastDir === 0 ? p.x : lastCursorPt.x);
+  const dir = dx > 6 ? 1 : dx < -6 ? -1 : 0;
+  if (dir && shakeLastDir && dir !== shakeLastDir) shakeFlips += 1;
+  if (dir) shakeLastDir = dir;
+  if (shakeFlips >= 4 && now >= shakeNext) {
+    shakeNext = now + 4000;
+    shakeFlips = 0;
+    say(pick(REACT.shaken, 'shaken'));
+  }
 }
 
 /* ---------------- 行为调度 ----------------
@@ -675,6 +725,13 @@ function startPoll() {
     }
 
     if (drag) {
+      drag.moved = Math.max(drag.moved, Math.hypot(p.x - drag.m0.x, p.y - drag.m0.y));
+      /* 挪够 12px 才算"被拎起来" */
+      if (!drag.said && drag.moved > 12) {
+        drag.said = true;
+        say(pick(REACT.grabbed, 'grabbed'));
+      }
+      checkShake(now, p);
       win.setPosition(
         Math.round(drag.w0.x + p.x - drag.m0.x),
         Math.round(drag.w0.y + p.y - drag.m0.y)
@@ -909,6 +966,24 @@ function startApi() {
         r ? { ok: true, result: r } : { ok: false, reason: lastAiError || '请求失败' })));
       return;
     }
+    /* 把它拎高 up 像素再松手，看自由落体。和 /walk 一样是调试口，
+     * 但也能当彩蛋用 */
+    if (req.method === 'POST' && req.url === '/drop') {
+      readBody(req, body => {
+        let o = {};
+        try { o = JSON.parse(body || '{}'); } catch (e) { /* 空 body 用默认 */ }
+        const up = Math.max(0, Math.min(600, Number(o.up) || 220));
+        clearSulk();
+        wake();
+        stopWalk();
+        const b = win.getBounds();
+        win.setPosition(b.x, Math.max(0, b.y - up));
+        say(pick(REACT.grabbed, 'grabbed'));
+        const fell = startFall();
+        res.end(JSON.stringify({ ok: fell }));
+      });
+      return;
+    }
     if (req.method === 'POST' && req.url === '/walk') {
       readBody(req, body => {
         let o = {};
@@ -922,7 +997,7 @@ function startApi() {
       return;
     }
     res.statusCode = 404;
-    res.end('{"ok":false,"hint":"GET /emotions | GET /state | GET /activity | POST /emotion | POST /walk | POST /comment | POST /agent | POST /settings"}');
+    res.end('{"ok":false,"hint":"GET /emotions | GET /state | GET /activity | POST /emotion | POST /walk | POST /comment | POST /agent | POST /drop | POST /settings"}');
   });
 
   apiServer.on('error', e => console.error('[api] 启动失败：', e.message));
@@ -952,11 +1027,22 @@ ipcMain.on('drag:start', () => {
   if (!win || win.isDestroyed()) return;
   stopWalk();
   wake();
+  clearSulk();
+  shakeFlips = 0;
+  shakeLastDir = 0;
   const b = win.getBounds();
-  drag = { m0: screen.getCursorScreenPoint(), w0: { x: b.x, y: b.y } };
+  /* 不在这里说「放我下来」—— 点击也是"按下+松开"，
+   * 一按就喊会把每次点击都变成拎起来。等真的挪动了再说，见 checkShake 上方 */
+  drag = { m0: screen.getCursorScreenPoint(), w0: { x: b.x, y: b.y }, moved: 0, said: false };
 });
 
-ipcMain.on('drag:end', () => { drag = null; lastInteract = Date.now(); savePosition(); });
+ipcMain.on('drag:end', () => {
+  const wasReal = !!(drag && drag.said);   /* 真拖过，不是单纯点了一下 */
+  drag = null;
+  lastInteract = Date.now();
+  /* 只有真拖过才掉落。点击不该让它掉 —— 而且正常情况下它本来就贴着地 */
+  if (!wasReal || !startFall()) savePosition();
+});
 
 ipcMain.on('poke', () => { wake(); stopWalk(); });
 

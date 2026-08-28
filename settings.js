@@ -33,6 +33,7 @@ const DEFAULTS = {
     autoBehave: true,      /* 自发散步与小动作 */
     shape: 'blob',         /* blob / wedge / gem */
     sketch: false,
+    dropFall: true,        /* 松手后自由落体到屏幕底部；关掉则停在原地 */
     x: null,               /* 上次退出时的窗口位置；null = 默认右下角 */
     y: null
   }
@@ -90,6 +91,7 @@ function normalize(c) {
       autoBehave: !!c.pet.autoBehave,
       shape: ['blob', 'wedge', 'gem'].includes(c.pet.shape) ? c.pet.shape : d.pet.shape,
       sketch: !!c.pet.sketch,
+      dropFall: c.pet.dropFall !== false,
       /* 位置允许为空（首次启动），但存进来的必须是有限数 */
       x: Number.isFinite(Number(c.pet.x)) ? Math.round(Number(c.pet.x)) : null,
       y: Number.isFinite(Number(c.pet.y)) ? Math.round(Number(c.pet.y)) : null

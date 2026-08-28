@@ -14,7 +14,8 @@
     quietWhenFullscreen: 'comment.quietWhenFullscreen',
     quietWhenGaming: 'comment.quietWhenGaming',
     useActiveHours: 'comment.useActiveHours',
-    autoBehave: 'pet.autoBehave'
+    autoBehave: 'pet.autoBehave',
+    dropFall: 'pet.dropFall'
   };
   const NUMS = { everyMin: 'comment.everyMin', minGapMin: 'comment.minGapMin', awayMin: 'comment.awayMin' };
   const TEXTS = {

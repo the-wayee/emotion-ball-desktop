@@ -1,0 +1,14 @@
+{
+  "name": "emotion-ball-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "基于 Emotion Ball 表情引擎的桌面宠物（个人学习用途）",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0"
+  }
+}

@@ -1,0 +1,73 @@
+/* ============================================================
+ * pet.css —— 桌宠壳样式
+ * 整页透明：窗口 320×300，球 200×200 靠下居中，上方留给气泡
+ * ============================================================ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  /* 全局禁选禁拖，避免拖拽时选中文本或触发原生图片拖拽 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  cursor: default;
+}
+
+/* 球体：底部居中，与 main.js 的 WIN_W/WIN_H 对应 */
+.pet {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  width: 200px;
+  height: 200px;
+  margin-left: -100px;
+  /* 命中检测走 JS 圆形判定，DOM 一律不吃事件 */
+  pointer-events: none;
+}
+
+.pet svg { display: block; width: 100%; height: 100%; overflow: visible; }
+
+/* 提示气泡 */
+.bubble {
+  position: absolute;
+  left: 50%;
+  bottom: 214px;
+  transform: translate(-50%, 6px);
+  max-width: 280px;
+  padding: 9px 13px;
+  border-radius: 13px;
+  background: rgba(28, 26, 38, 0.92);
+  color: #F3F0FA;
+  font: 500 13px/1.5 -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+  text-align: center;
+  word-break: break-word;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .22s ease, transform .22s ease, visibility .22s;
+  pointer-events: none;
+}
+
+.bubble.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+/* 小尾巴 */
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 2px;
+  background: inherit;
+  transform: rotate(45deg);
+}

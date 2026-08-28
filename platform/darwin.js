@@ -13,9 +13,8 @@
 
 const { execFile } = require('child_process');
 
-/* 桌宠自己（启动或点击时会短暂抢焦点），不能算成"用户在干嘛" */
-const SELF = /^(electron|emotion-ball-desktop)$/i;
-let lastKnownApp = null;
+/* 前台轮询间隔：一次 frontApp 实测 16ms，几秒一次完全无压力 */
+const FRONT_POLL_MS = 4000;
 
 function run(cmd, args) {
   return new Promise(resolve => {
@@ -23,18 +22,14 @@ function run(cmd, args) {
   });
 }
 
-/** @returns {{app:string|null, self:boolean}} self = 当前前台就是桌宠自己 */
+/** 只取原始前台名，不做任何过滤 —— 是不是桌宠自己、是不是 Helper，
+ *  由 activity.js 统一判断，免得两个平台各写一份还写歪 */
 async function frontApp() {
   const asn = (await run('lsappinfo', ['front'])).trim();
-  if (!asn) return { app: lastKnownApp, self: false };
+  if (!asn) return null;
   const info = await run('lsappinfo', ['info', '-only', 'name', asn]);
   const m = info.match(/"LSDisplayName"\s*=\s*"([^"]*)"/);
-  const name = m ? m[1] : null;
-  /* 前台是自己（设置窗口 / 刚点过小球）时退回上一个已知应用，
-   * 并把 self 报上去，界面才能解释清楚显示的是"上一个" */
-  if (!name || SELF.test(name)) return { app: lastKnownApp, self: !!name };
-  lastKnownApp = name;
-  return { app: name, self: false };
+  return m ? m[1] : null;
 }
 
 /* 用 lsappinfo visibleProcessList 而不是 ps：
@@ -64,8 +59,8 @@ function detectFullscreen(displays) {
 }
 
 async function probe(displays) {
-  const [front, apps] = await Promise.all([frontApp(), runningApps()]);
-  return { app: front.app, self: front.self, apps, fullscreen: detectFullscreen(displays) };
+  const [app, apps] = await Promise.all([frontApp(), runningApps()]);
+  return { app, apps, fullscreen: detectFullscreen(displays) };
 }
 
-module.exports = { probe };
+module.exports = { probe, pollFront: frontApp, FRONT_POLL_MS };

@@ -84,6 +84,7 @@ let sulkUntil = 0;                       /* 闹脾气到期时刻，之前一切
 let aiOn = true;
 let aiBusy = false;
 let aiTimer = null;
+let frontTimer = null;
 let lastComment = 0;
 let lastActKey = null;                   /* 上次快照的活动分类，变了就值得说一句 */
 let lastAct = null;                      /* 最近一次快照，设置界面直接用 */
@@ -819,6 +820,18 @@ ipcMain.on('menu', () => {
 
 /* ---------------- 生命周期 ---------------- */
 
+/* 单实例锁：多开时后启动的那个 HTTP 端口绑定会失败，界面照常但接口不通，
+ * 非常容易误判成"功能坏了"（排查活动检测时就撞上过，机器上同时跑着 6 个）。
+ * 第二个实例直接退出，并把已有实例的设置窗口顶到前面。 */
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (setWin && !setWin.isDestroyed()) { setWin.show(); setWin.focus(); }
+    else if (win && !win.isDestroyed()) win.showInactive();
+  });
+}
+
 app.whenReady().then(() => {
   if (app.dock) app.dock.hide();       /* macOS：不占 Dock，纯托盘应用 */
   createWindow();
@@ -826,7 +839,12 @@ app.whenReady().then(() => {
   startApi();
   applySettings();                 /* 把落盘的配置灌进运行时 */
   aiTimer = setInterval(tickAI, AI_TICK_MS);
-  setTimeout(tickAI, 1500);        /* 启动后先采一次，别让设置界面一开始就是空的 */
+  /* 前台应用单独用一个更密的轻量轮询：完整采样 20s 一次太稀，
+   * 刚启动那次又往往采到桌宠自己（它启动时会短暂抢焦点），
+   * 结果设置界面长时间显示"还没见过别的应用" */
+  frontTimer = setInterval(() => activity.pollFront(), activity.frontPollMs);
+  setTimeout(() => activity.pollFront(), 800);
+  setTimeout(tickAI, 2500);
   if (!settings.apiKey()) console.log('[deepseek] 还没填 Key —— 右键桌宠 → 设置');
 });
 
@@ -835,5 +853,6 @@ app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
   if (pollTimer) clearInterval(pollTimer);
   if (aiTimer) clearInterval(aiTimer);
+  if (frontTimer) clearInterval(frontTimer);
   if (apiServer) apiServer.close();
 });

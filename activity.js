@@ -22,7 +22,11 @@ const impl = (() => {
     console.warn('[activity] 平台实现加载失败：', e.message);
   }
   /* Linux 等：不报错，只是认不出在干嘛 */
-  return { probe: async () => ({ app: null, self: false, apps: [], fullscreen: false }) };
+  return {
+    probe: async () => ({ app: null, apps: [], fullscreen: false }),
+    pollFront: async () => null,
+    FRONT_POLL_MS: 60000
+  };
 })();
 
 /* 分类关键词：小写子串匹配。中英文都列上 ——
@@ -81,12 +85,26 @@ const RULES = [
 const MRU_MAX = 5;
 const mru = [];
 
-function noteApp(name) {
-  if (!name) return;
-  const i = mru.indexOf(name);
+/* 桌宠自己（启动、开设置窗口、点小球时都会短暂抢焦点），不能算成"用户在干嘛" */
+const SELF = /^(electron|emotion-ball-desktop)$/i;
+let lastKnownApp = null;
+
+/**
+ * 收口前台应用名：SELF / Helper 一律不算数，退回上一个真正见过的应用。
+ * 这套判断放在这里而不是平台层 —— 之前分散在两个平台文件里，
+ * NOISE 只作用于"可见应用列表"、忘了作用于前台名，
+ * 结果 "Lark Helper" 直接进了 MRU。
+ */
+function acceptFront(raw) {
+  if (!raw) return { app: lastKnownApp, self: false };
+  if (SELF.test(raw)) return { app: lastKnownApp, self: true };
+  if (NOISE.test(raw)) return { app: lastKnownApp, self: false };
+  lastKnownApp = raw;
+  const i = mru.indexOf(raw);
   if (i >= 0) mru.splice(i, 1);
-  mru.unshift(name);
+  mru.unshift(raw);
   if (mru.length > MRU_MAX) mru.pop();
+  return { app: raw, self: false };
 }
 
 /* 一堆 Helper、后台服务和系统进程，分类时全部忽略 */
@@ -112,14 +130,12 @@ async function snapshot(displays) {
     raw = await impl.probe(displays);
   } catch (e) {
     console.warn('[activity] 采样失败：', e.message);
-    raw = { app: null, self: false, apps: [], fullscreen: false };
+    raw = { app: null, apps: [], fullscreen: false };
   }
 
   const apps = (raw.apps || []).filter(a => a && !NOISE.test(a));
-  const front = classify(raw.app);
-
-  /* 只有真正切到前台才计入 MRU；self 时 raw.app 是回忆值，重复记会打乱次序 */
-  if (!raw.self) noteApp(raw.app);
+  const cur = acceptFront(raw.app);
+  const front = classify(cur.app);
 
   /* 前台认不出来时，看看后台有没有跑着能认出来的（游戏 / 播放器常挂后台） */
   let hinted = null;
@@ -132,12 +148,12 @@ async function snapshot(displays) {
   const cat = front || hinted || { key: 'unknown', label: '不太看得出在干嘛' };
 
   return {
-    app: raw.app || null,
-    self: !!raw.self,          /* 当前前台就是桌宠自己，app 是记住的上一个 */
+    app: cur.app || null,
+    self: cur.self,            /* 当前前台就是桌宠自己，app 是记住的上一个 */
     key: cat.key,
     label: cat.label,
     /* 发给模型的只有这一小串：最近用过的应用，去掉当前这个（已经单独说了） */
-    recentApps: mru.filter(a => a !== raw.app).slice(0, MRU_MAX - 1),
+    recentApps: mru.filter(a => a !== cur.app).slice(0, MRU_MAX - 1),
     /* 可见应用全集只在本地用（认不出前台时拿来猜游戏 / 播放器），不外发 */
     visibleCount: apps.length,
     fullscreen: !!raw.fullscreen,
@@ -145,4 +161,20 @@ async function snapshot(displays) {
   };
 }
 
-module.exports = { snapshot, classify, platform: process.platform };
+/** 轻量前台轮询：只更新"当前 / 最近用过的应用"，不取可见列表也不判全屏。
+ *  macOS 一次 16ms，几秒一轮无压力；Windows 要起 PowerShell，间隔由平台层给。 */
+async function pollFront() {
+  try {
+    return acceptFront(await impl.pollFront()).app;
+  } catch (e) {
+    return lastKnownApp;
+  }
+}
+
+module.exports = {
+  snapshot,
+  pollFront,
+  classify,
+  frontPollMs: impl.FRONT_POLL_MS || 20000,
+  platform: process.platform
+};

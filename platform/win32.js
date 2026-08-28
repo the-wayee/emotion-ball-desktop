@@ -18,9 +18,9 @@
 
 const { execFile } = require('child_process');
 
-/* 桌宠自己不能算成"用户在干嘛" */
-const SELF = /^(electron|emotion-ball-desktop)$/i;
-let lastKnownApp = null;
+/* PowerShell 起一次约 1s（Add-Type 编译），没法像 macOS 那样几秒一轮，
+ * 所以前台轮询就沿用完整采样的节奏 */
+const FRONT_POLL_MS = 20000;
 
 /* $pid 在 PowerShell 里是只读的自动变量，必须换个名字，否则整段脚本报错 */
 const PS = `
@@ -94,17 +94,14 @@ function runPS() {
 
 async function probe() {
   const r = await runPS();
-  if (!r) return { app: lastKnownApp, self: false, apps: [], fullscreen: false };
-
-  let app = r.app || null;
-  let self = false;
-  if (!app || SELF.test(app)) { self = !!app; app = lastKnownApp; }
-  else lastKnownApp = app;
-
+  if (!r) return { app: null, apps: [], fullscreen: false };
   /* ConvertTo-Json 对单元素数组会退化成标量，统一成数组 */
   const apps = Array.isArray(r.apps) ? r.apps : (r.apps ? [r.apps] : []);
-
-  return { app, self, apps, fullscreen: !!r.fullscreen };
+  return { app: r.app || null, apps, fullscreen: !!r.fullscreen };
 }
 
-module.exports = { probe };
+module.exports = {
+  probe,
+  pollFront: async () => (await probe()).app,
+  FRONT_POLL_MS
+};

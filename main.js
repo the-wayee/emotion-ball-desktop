@@ -36,6 +36,9 @@ const CROUCH_MS = 150;    /* 蹬地前的下蹲蓄力 */
 const ACTIVE_MS = 45000;    /* 45s 内算活跃期，动作频繁 */
 const SLEEP_MS = 150000;    /* 150s 后睡觉 */
 
+const SULK_AT = 8;          /* 连击到第几下彻底不理人 */
+const SULK_MS = 25000;      /* 闹脾气时长：期间点击 / 悬停一律无响应 */
+
 const IDLE_ID = '02';       /* 待机 */
 const SLEEP_ID = '00';      /* 睡眠 */
 const WALK_ID = '50';       /* 散步（自定义段，渲染进程运行时注册） */
@@ -67,6 +70,7 @@ let walk = null;                         /* { dir, t0, hops, x0, y0 } */
 let clickN = 0;                          /* 连击计数 */
 let lastClickAt = 0;
 let hoverNext = 0;                       /* 悬停反应冷却 */
+let sulkUntil = 0;                       /* 闹脾气到期时刻，之前一切交互无响应 */
 const lastPick = new Map();              /* 每个池上次抽中的下标，避免连续重复 */
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -263,9 +267,16 @@ function say(r) {
   behaveNext = Date.now() + hold + rand(4000, 9000);
 }
 
+function clearSulk() { sulkUntil = 0; clickN = 0; }
+
 function react(kind) {
   const now = Date.now();
   const wasSleeping = phase === 'sleep';
+
+  /* 闹脾气期间是真的不理人：点击、悬停、双击一概不响应。
+   * 表情不是冻住的 —— 它保持在 sulk 那条表情上继续呼吸眨眼，
+   * 只是不给任何新反馈，读起来是"生气"而不是"卡死"。 */
+  if (now < sulkUntil) return;
 
   if (kind === 'hover') {
     /* 冷却 + 不打断正在说的话：鼠标扫来扫去不该让它一直叨叨 */
@@ -290,6 +301,18 @@ function react(kind) {
   hoverNext = now + 6000;                /* 刚聊过就别再触发悬停反应 */
 
   if (wasSleeping) { say(pick(REACT.wakeUp, 'wake')); return; }
+
+  /* 戳满 SULK_AT 下：撂一句狠话，然后进入冷却彻底不理人。
+   * 表情按 SULK_MS 保持 —— tempBackAt 到期正好就是气消的时刻，
+   * 由 tickBehaviour 接手说一句 calmDown 收尾 */
+  if (clickN >= SULK_AT) {
+    const r = pick(REACT.sulk, 'sulk');
+    sulkUntil = now + SULK_MS;
+    setEmotion(r.id, SULK_MS, r.text || null);
+    behaveNext = sulkUntil + rand(2000, 5000);
+    return;
+  }
+
   const tier = clickN <= 2 ? 'calm' : clickN <= 5 ? 'bored' : 'angry';
   say(pick(REACT.click[tier], 'click:' + tier));
 }
@@ -331,8 +354,18 @@ function tickBehaviour(now) {
    * 这个 return 必须在回落检查之前：否则散步前排队的临时表情回落
    * 会在半路触发，把「散步」覆盖成「待机」 */
   if (walk) return;
-  /* 临时表情到点回落 */
-  if (tempBackAt && now >= tempBackAt) { tempBackAt = 0; setEmotion(IDLE_ID); }
+  /* 临时表情到点回落。闹脾气的 hold 时长就是 SULK_MS，
+   * 所以这里到期正好是气消的时刻，接一句 calmDown 收尾 */
+  if (tempBackAt && now >= tempBackAt) {
+    tempBackAt = 0;
+    if (sulkUntil && now >= sulkUntil) {
+      clearSulk();
+      say(pick(REACT.calmDown, 'calmDown'));
+    } else {
+      setEmotion(IDLE_ID);
+    }
+  }
+  if (now < sulkUntil) return;              /* 闹脾气期间不自发散步 / 换表情 */
   if (now >= behaveNext) pickBehaviour(now);
 }
 
@@ -402,7 +435,7 @@ function emotionSubmenus() {
         .filter(e => e.group === g.key)
         .map(e => ({
           label: `${e.id}  ${e.name}`,
-          click: () => { wake(); stopWalk(); setEmotion(e.id); }
+          click: () => { clearSulk(); wake(); stopWalk(); setEmotion(e.id); }
         }))
     }))
     .filter(m => m.submenu.length);
@@ -497,6 +530,8 @@ function startApi() {
         stage: walk ? walk.stage : null,
         height: walk ? Math.round(walk.h) : 0,
         autoBehave: autoBehave,
+        clicks: clickN,
+        sulkMsLeft: Math.max(0, sulkUntil - Date.now()),
         idleForMs: Date.now() - lastInteract,
         bounds: b
       }));
@@ -504,6 +539,7 @@ function startApi() {
     }
     if (req.method === 'POST' && req.url === '/emotion') {
       readBody(req, body => {
+        clearSulk();                      /* API 是控制通道，不算"戳它" */
         wake();
         stopWalk();
         tempBackAt = 0;
@@ -516,6 +552,7 @@ function startApi() {
       readBody(req, body => {
         let o = {};
         try { o = JSON.parse(body || '{}'); } catch (e) { /* 空 body 也当默认散步 */ }
+        clearSulk();
         wake();
         startWalk(o.dir === 'left' ? -1 : o.dir === 'right' ? 1 : (Math.random() < 0.5 ? -1 : 1),
           Number(o.launches) || Number(o.hops) || 4);

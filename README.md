@@ -316,43 +316,53 @@ curl -X POST http://127.0.0.1:17817/settings # 打开设置窗口
 中途插播的「出错」「等你回话」播完会**回到忙碌**而不是待机 —— 任务还在跑。
 结束事件没送达时有 30 分钟兜底,不会永远卡住。
 
-### Claude Code
+### 怎么接
 
-写进 `~/.claude/settings.json`:
+**方式一:设置界面**(推荐)
 
-```json
-{
-  "hooks": {
-    "Stop": [{
-      "hooks": [{
-        "type": "command",
-        "command": "curl -s -m 2 -X POST http://127.0.0.1:17817/agent -H 'Content-Type: application/json' --data-binary @- >/dev/null 2>&1 || true",
-        "async": true,
-        "timeout": 5
-      }]
-    }]
-  }
-}
+右键桌宠 → 设置 → 「接入编码助手」,点一下「接入」就行:
+
+```
+Claude Code            [接入]
+~/.claude/settings.json
+
+Codex                  [接入]
+~/.codex/config.toml
 ```
 
-同样的条目复制给 `SessionStart` / `UserPromptSubmit` / `Notification` /
-`SessionEnd` / `PostToolUseFailure`。
+接好之后显示「已接入　7 个事件」/「已接入　原通知程序已保留转发」。
+再点「撤除」可以干净卸载。
 
-> 用 `command` + `async: true` + `|| true`,不用 `http` 类型的 hook ——
-> **桌宠没开的时候绝不能拖住你的会话**。这三样保证请求在后台跑、连不上也静默失败。
-> hook 的 stdin JSON 里带 `hook_event_name`,`--data-binary @-` 原样转发即可。
+**方式二:命令行**
 
-### Codex
-
-`~/.codex/config.toml` 的 `notify` **只能配一个程序**,直接换掉会顶掉你已有的通知。
-用 [tools/codex-notify.sh](tools/codex-notify.sh) 分发:
-
-```toml
-notify = ["/绝对路径/tools/codex-notify.sh", "turn-ended"]
+```bash
+npm run hooks            # 看当前状态
+npm run hooks:install    # 两边都接上
+npm run hooks:remove     # 撤掉
 ```
 
-脚本先把参数原样转给原程序,再通知桌宠。原程序路径在脚本顶部的 `ORIGINAL`,
-不需要就留空。
+两条路走的是同一套 [integrations.js](integrations.js),效果完全一致。
+
+> Claude Code 需要**重开一个会话**(或打开一次 `/hooks`)才会加载新 hook。
+
+### 安装器做了什么
+
+| | 动作 |
+|---|---|
+| **Claude Code** | 往 `~/.claude/settings.json` 的 7 个事件各加一条 hook,原有配置原样保留 |
+| **Codex** | 生成包装脚本到应用数据目录,把 `notify` 指过去 |
+
+三条原则:
+
+1. **幂等** —— 重复安装不会写出两份,靠命令里的 `/agent` 标记识别自己人;
+2. **先备份** —— 动任何文件之前先写 `.bak`;
+3. **不顶掉别人** —— Codex 的 `notify` **只能配一个程序**。安装时会把你原来那个
+   **读出来存好**,由生成的包装脚本转发;卸载时原样还回去。路径不是硬编码的,
+   谁装都能用。
+
+hook 用的是 `command` 类型 + `async: true` + `|| true`,不用 `http` 类型 ——
+**桌宠没开的时候绝不能拖住你的会话**。这三样保证请求在后台跑、连不上也静默失败。
+Windows 上自动换成 PowerShell 的 `Invoke-RestMethod`,不依赖 curl。
 
 ### 自测
 

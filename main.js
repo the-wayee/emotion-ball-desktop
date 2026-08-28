@@ -17,6 +17,7 @@ const REACT = require('./reactions');
 const activity = require('./activity');
 const deepseek = require('./deepseek');
 const settings = require('./settings');
+const integrations = require('./integrations');
 
 const IS_MAC = process.platform === 'darwin';
 
@@ -895,6 +896,10 @@ ipcMain.handle('settings:test', async () => {
 
 ipcMain.handle('settings:models', () => deepseek.listModels());
 
+ipcMain.handle('integrations:status', () => integrations.status());
+ipcMain.handle('integrations:set', (_e, { target, on }) =>
+  (on ? integrations.install(target) : integrations.uninstall(target)));
+
 ipcMain.handle('settings:openFolder', () => shell.showItemInFolder(settings.configPath()));
 
 ipcMain.handle('settings:close', () => { if (setWin && !setWin.isDestroyed()) setWin.close(); });
@@ -938,6 +943,7 @@ app.whenReady().then(() => {
   createWindow();
   startPoll();
   startApi();
+  integrations.setUserData(app.getPath('userData'));
   applySettings();                 /* 把落盘的配置灌进运行时 */
   aiTimer = setInterval(tickAI, AI_TICK_MS);
   /* 前台应用单独用一个更密的轻量轮询：完整采样 20s 一次太稀，

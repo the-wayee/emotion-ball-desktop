@@ -6,7 +6,10 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "hooks": "node tools/setup-hooks.mjs",
+    "hooks:install": "node tools/setup-hooks.mjs install",
+    "hooks:remove": "node tools/setup-hooks.mjs remove"
   },
   "devDependencies": {
     "electron": "^44.0.0"

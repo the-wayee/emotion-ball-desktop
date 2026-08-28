@@ -157,7 +157,63 @@
       : '拉不到模型列表(Key 不对或网络不通),可以手动填';
   }
 
-  $('refresh').addEventListener('click', () => { refreshProbe(); refreshModels(); });
+  /* ---- 接入 Claude Code / Codex ----
+   * 探测 / 安装 / 卸载都在主进程的 integrations.js，这里只负责画和点。
+   * 命令行 `npm run hooks:install` 走的是同一套代码，两条路效果一致。 */
+
+  const INTEG = {
+    claude: { name: 'Claude Code', file: '~/.claude/settings.json' },
+    codex: { name: 'Codex', file: '~/.codex/config.toml' }
+  };
+
+  let integBusy = false;
+  async function refreshIntegrations() {
+    const st = await api.integrations();
+    const box = $('integrations');
+    box.innerHTML = '';
+    for (const key of ['claude', 'codex']) {
+      const v = st[key];
+      const meta = INTEG[key];
+      const row = document.createElement('div');
+      row.className = 'integ' + (v.available ? '' : ' off');
+
+      let note;
+      if (!v.available) note = esc(v.reason);
+      else if (v.installed) {
+        note = '已接入';
+        if (key === 'claude') note += `　${v.total} 个事件`;
+        if (key === 'codex' && v.forwarding) note += '　原通知程序已保留转发';
+      } else if (v.partial) note = `只接了一部分(${v.events}/${v.total}),点一下补齐`;
+      else note = esc(meta.file);
+
+      row.innerHTML = `<div class="who"><b>${esc(meta.name)}</b><span>${note}</span></div>`;
+      if (v.available) {
+        const btn = document.createElement('button');
+        btn.className = v.installed ? 'ghost' : 'primary';
+        btn.textContent = v.installed ? '撤除' : (v.partial ? '补齐' : '接入');
+        btn.disabled = integBusy;
+        btn.addEventListener('click', async () => {
+          integBusy = true;
+          btn.disabled = true;
+          btn.textContent = '处理中…';
+          const r = await api.setIntegration(key, !v.installed);
+          integBusy = false;
+          await refreshIntegrations();
+          if (r && r.ok) {
+            toast(v.installed
+              ? `已撤除 <b>${esc(meta.name)}</b>`
+              : `已接入 <b>${esc(meta.name)}</b>,重开一个会话生效`, 'ok');
+          } else {
+            toast(`没成功：<b>${esc((r && r.reason) || '未知原因')}</b>`, 'err');
+          }
+        });
+        row.appendChild(btn);
+      }
+      box.appendChild(row);
+    }
+  }
+
+  $('refresh').addEventListener('click', () => { refreshProbe(); refreshModels(); refreshIntegrations(); });
 
   /* 面板自动刷新：原来只在打开时渲染一次，切了应用回来还是旧文案，
    * 让人以为检测很慢 —— 其实后端 50ms 就知道了。
@@ -187,6 +243,7 @@
      * Windows 每次都要起 PowerShell（约 1s），必须放慢，否则 CPU 打满 */
     startAutoProbe(first && first.platform === 'win32' ? 5000 : 1200);
     refreshProbe();
+    refreshIntegrations();
     if (cfg.deepseek.apiKey) refreshModels();
   })();
 })();

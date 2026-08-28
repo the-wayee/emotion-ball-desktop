@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('settings', {
   save: patch => ipcRenderer.invoke('settings:save', patch),
   test: () => ipcRenderer.invoke('settings:test'),
   models: () => ipcRenderer.invoke('settings:models'),
+  integrations: () => ipcRenderer.invoke('integrations:status'),
+  setIntegration: (target, on) => ipcRenderer.invoke('integrations:set', { target, on }),
   probe: () => ipcRenderer.invoke('settings:probe'),
   openFolder: () => ipcRenderer.invoke('settings:openFolder'),
   close: () => ipcRenderer.invoke('settings:close')

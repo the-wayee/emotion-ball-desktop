@@ -141,6 +141,11 @@ function createWindow() {
 
 /* ---------------- 设置窗口 ---------------- */
 
+function setFrontPoll(ms) {
+  if (frontTimer) clearInterval(frontTimer);
+  frontTimer = setInterval(() => activity.pollFront(), ms);
+}
+
 function openSettings() {
   if (setWin && !setWin.isDestroyed()) { setWin.show(); setWin.focus(); return; }
   setWin = new BrowserWindow({
@@ -156,7 +161,11 @@ function openSettings() {
     webPreferences: {
       preload: path.join(__dirname, 'preload-settings.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      /* 关键：窗口一失去焦点，Chromium 就把定时器降频（实测 500ms 的
+       * 定时器 4 秒里只跑 3 次）。而这个窗口的状态面板恰恰要在用户切到
+       * 别的应用时保持刷新，否则切回来看到的还是旧值 */
+      backgroundThrottling: false
     }
   });
   setWin.setMenuBarVisibility(false);          /* Windows 上默认会有一条菜单栏 */
@@ -165,7 +174,10 @@ function openSettings() {
     setWin.show();
     app.focus({ steal: true });
   });
-  setWin.on('closed', () => { setWin = null; });
+  /* 设置界面开着时用户很可能正在切应用验证效果，把前台轮询加密到 1s；
+   * 一次 9.4ms，只在窗口开着时付这个代价 */
+  setFrontPoll(1000);
+  setWin.on('closed', () => { setWin = null; setFrontPoll(activity.frontPollMs); });
 }
 
 /** 配置改动后立即生效，不用重启 */
@@ -842,7 +854,7 @@ app.whenReady().then(() => {
   /* 前台应用单独用一个更密的轻量轮询：完整采样 20s 一次太稀，
    * 刚启动那次又往往采到桌宠自己（它启动时会短暂抢焦点），
    * 结果设置界面长时间显示"还没见过别的应用" */
-  frontTimer = setInterval(() => activity.pollFront(), activity.frontPollMs);
+  setFrontPoll(activity.frontPollMs);
   setTimeout(() => activity.pollFront(), 800);
   setTimeout(tickAI, 2500);
   if (!settings.apiKey()) console.log('[deepseek] 还没填 Key —— 右键桌宠 → 设置');

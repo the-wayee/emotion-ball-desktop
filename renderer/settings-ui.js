@@ -78,9 +78,13 @@
 
   const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
-  async function refreshProbe() {
-    $('probe').textContent = '检测中…';
+  let probeBusy = false;
+  async function refreshProbe(quiet) {
+    if (probeBusy) return;
+    probeBusy = true;
+    if (!quiet) $('probe').textContent = '检测中…';
     const p = await api.probe();
+    probeBusy = false;
     if (!p) { $('probe').textContent = '读取失败'; return; }
     const yes = v => (v ? '是' : '否');
     /* 设置窗口开着的时候，前台应用就是桌宠自己 —— 显示的必然是"上一个"，
@@ -88,10 +92,14 @@
     const appLine = p.app
       ? `<b>${esc(p.app)}</b>${p.self ? '　<span class="dim">(你正看着设置窗口,这是切过来之前用的)</span>' : ''}`
       : (p.self ? '<b>还没见过别的应用</b>　<span class="dim">(切到别的窗口用几秒再回来)</span>' : '<b>识别不到</b>');
+    /* 顺带把发给模型的那条轨迹显出来 —— 用户能直接看到 AI 拿到的是什么 */
+    const trail = (p.recentApps || []).length
+      ? `\n最近用过：<b>${p.recentApps.map(esc).join(' → ')}</b>`
+      : '';
     $('probe').innerHTML =
       `前台应用：${appLine}\n` +
       `判断在：<b>${esc(p.label)}</b>\n` +
-      `全屏中：<b>${yes(p.fullscreen)}</b>　　当前系统：<b>${esc(p.platform)}</b>`;
+      `全屏中：<b>${yes(p.fullscreen)}</b>　　当前系统：<b>${esc(p.platform)}</b>` + trail;
 
     /* 全屏判定的口径两个平台不一样，实话写在界面上 */
     $('fsHint').textContent = p.platform === 'darwin'
@@ -150,6 +158,20 @@
   }
 
   $('refresh').addEventListener('click', () => { refreshProbe(); refreshModels(); });
+
+  /* 面板自动刷新：原来只在打开时渲染一次，切了应用回来还是旧文案，
+   * 让人以为检测很慢 —— 其实后端 50ms 就知道了。
+   *
+   * 注意不能用 document.hidden 做守卫：窗口明明在屏幕上，只要不是焦点窗口
+   * Electron 就报 hidden，加了守卫等于把刷新全挡掉。窗口关闭时页面一起销毁，
+   * 定时器不会漏。 */
+  let probeTimer = 0;
+  function startAutoProbe(ms) {
+    clearInterval(probeTimer);
+    probeTimer = setInterval(() => refreshProbe(true), ms);
+  }
+  /* 切回窗口时立刻刷一次，不用等下一个 tick */
+  window.addEventListener('focus', () => refreshProbe(true));
   $('openFolder').addEventListener('click', () => api.openFolder());
 
   window.addEventListener('keydown', e => {
@@ -160,6 +182,10 @@
   (async () => {
     cfg = await api.get();
     render();
+    const first = await api.probe();
+    /* 刷新频率按平台定：macOS 一次采样约 21ms，1.2s 一刷无所谓；
+     * Windows 每次都要起 PowerShell（约 1s），必须放慢，否则 CPU 打满 */
+    startAutoProbe(first && first.platform === 'win32' ? 5000 : 1200);
     refreshProbe();
     if (cfg.deepseek.apiKey) refreshModels();
   })();

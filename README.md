@@ -153,6 +153,24 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 不说的情况:不在设定时段、光标超时没动、全屏 / 游戏中(如果开了对应开关)、
 正在闹脾气、正在散步、上一句还没说完。睡着了会醒过来说(但不播唤醒序列,免得白闪)。
 
+### 模型与推理开关
+
+模型填好 Key 后会自动从 `GET /models` 列出账号可用的,在输入框里下拉选即可。
+
+请求里带了 `thinking: { type: 'disabled' }` —— DeepSeek v4 系是**推理模型**,
+默认会先产出几百到两千字的 `reasoning_content`。为一句 18 字的吐槽思考两千字
+纯属浪费,实测:
+
+| | 耗时 | 推理 | 输出 token |
+|---|---|---|---|
+| 默认(带推理) | 11954ms | 2027 字 | 1323 |
+| `reasoning_effort: low` | 1219ms | 148 字 | 98 |
+| **`thinking: disabled`** | **930ms** | **0** | **16** |
+
+台词质量没有变差。`max_tokens` 同时给到 1500 作兜底 —— 万一换成不认
+`thinking` 参数的模型,推理照跑,额度不够就会返回**空 content**,
+表现为"请求失败"却查不出原因(这个坑踩过,见下)。
+
 ### 隐私
 
 发出去的**只有应用名和分类**,例如「用户现在在用:Code(看起来在写代码)」。
@@ -180,10 +198,22 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 ### 调试
 
 ```bash
-curl http://127.0.0.1:17817/activity       # 看它以为你在干嘛
-curl -X POST http://127.0.0.1:17817/comment  # 手动催一句,返回模型原样结果
+curl http://127.0.0.1:17817/activity         # 看它以为你在干嘛
+curl -X POST http://127.0.0.1:17817/comment  # 手动催一句
 curl -X POST http://127.0.0.1:17817/settings # 打开设置窗口
 ```
+
+失败时会带上可操作的原因,设置界面和这里都一样,不用去翻日志:
+
+```
+{"ok":false,"reason":"HTTP 401 · API Key 不对 · Authentication Fails..."}
+{"ok":false,"reason":"HTTP 400 · The supported API model names are deepseek-v4-pro, ..."}
+{"ok":false,"reason":"模型把额度用在推理上了(推理 1299 字),没留下正文。换个模型试试"}
+```
+
+> **只能同时跑一个实例** —— 多开时后启动的那个 HTTP 端口会绑定失败(日志里有提示),
+> 界面照常但接口不通,很容易误判成"功能坏了"。调试前先
+> `pkill -f emotion-ball-desktop`。
 
 ## AI 接口
 

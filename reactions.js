@@ -84,6 +84,18 @@ module.exports = {
     { id: '02' }
   ],
 
+  /* 编码代理（Claude Code / Codex）的任务状态。
+   * 由 POST /agent 驱动，事件名见 main.js 的 AGENT_MAP。
+   * busy 类事件会一直保持到收到结束事件为止。 */
+  agent: {
+    start:   { id: '01', text: '开工了' },
+    working: { id: '32', text: '接到活了,干起来' },
+    waiting: { id: '35', text: '卡住了,等你回话' },
+    done:    { id: '33', text: '干完了' },
+    failed:  { id: '34', text: '出岔子了' },
+    end:     { id: '00', text: null }
+  },
+
   /* 双击撒花 */
   delight: [
     { id: '10', text: '哇哦!' },

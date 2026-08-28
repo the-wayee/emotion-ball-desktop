@@ -90,6 +90,11 @@ let lastActKey = null;                   /* 上次快照的活动分类，变了
 let lastAct = null;                      /* 最近一次快照，设置界面直接用 */
 let recentSaid = [];                     /* 最近说过的话，塞进提示里避免复读 */
 let lastAiError = null;                  /* 最近一次失败原因，设置界面要显示 */
+
+/* ---- 编码代理（Claude Code / Codex）状态 ---- */
+let agentBusy = false;                   /* 任务进行中：一直保持忙碌表情 */
+let agentBusyUntil = 0;                  /* 兜底：结束事件没来也不会永远卡在忙碌 */
+let agentSeen = null;                    /* 最近一次事件名，/state 里能看到 */
 let lastCursorMove = Date.now();
 let lastCursorPt = { x: -1, y: -1 };
 const lastPick = new Map();              /* 每个池上次抽中的下标，避免连续重复 */
@@ -412,6 +417,22 @@ function pickBehaviour(now) {
 function tickBehaviour(now) {
   if (drag) return;
 
+  /* 代理任务进行中：保持忙碌表情，不散步也不换表情。
+   * 结束事件没送达时靠 AGENT_BUSY_MAX 兜底解除，免得永远卡住 */
+  if (agentBusy) {
+    if (now >= agentBusyUntil) {
+      agentBusy = false;
+      setEmotion(IDLE_ID);
+    } else {
+      /* 忙碌期间插播的「出错」「等你回话」播完，回到忙碌表情而不是待机 */
+      if (tempBackAt && now >= tempBackAt) {
+        tempBackAt = 0;
+        setEmotion(REACT.agent.working.id);
+      }
+      return;
+    }
+  }
+
   /* 三段生命周期切换 */
   const idleFor = now - lastInteract;
   const want = idleFor > SLEEP_MS ? 'sleep' : idleFor > ACTIVE_MS ? 'drift' : 'active';
@@ -495,6 +516,7 @@ async function tickAI() {
   lastAct = act;
 
   if (!settings.isReady() || !aiOn) return;
+  if (agentBusy) return;                        /* 代理干活时别插嘴 */
   /* 用户设的安静时段 */
   if (!settings.withinActiveHours(new Date())) return;
   /* 人不在就别自言自语 */
@@ -515,6 +537,62 @@ async function tickAI() {
   if (!changed && now - lastComment < c.everyMin * 60000) return;
 
   await comment(act);
+}
+
+/* ---------------- 编码代理接入 ----------------
+ * Claude Code 的 hook 与 Codex 的 notify 都把各自的 JSON 原样 POST 到 /agent，
+ * 这里统一翻译成 reactions.agent 里的一条。字段名以实测为准：
+ * Claude Code hook 的 stdin JSON 带 hook_event_name / tool_name / cwd；
+ * Codex notify 带 type（agent-turn-complete 等）。 */
+
+const AGENT_MAP = {
+  /* Claude Code */
+  SessionStart: 'start',
+  UserPromptSubmit: 'working',
+  Notification: 'waiting',
+  PermissionRequest: 'waiting',
+  Stop: 'done',
+  SubagentStop: null,               /* 子代理结束不打扰，主任务还在跑 */
+  PostToolUseFailure: 'failed',
+  SessionEnd: 'end',
+  /* Codex */
+  'agent-turn-complete': 'done',
+  'turn-ended': 'done'
+};
+
+const AGENT_BUSY_MAX = 30 * 60 * 1000;   /* 忙碌状态的最长保持时间 */
+
+/** @returns {string|null} 实际采用的动作名 */
+function agentEvent(payload) {
+  const raw = payload && (payload.hook_event_name || payload.type || payload.event);
+  if (!raw) return null;
+  agentSeen = raw;
+  const key = AGENT_MAP[raw];
+  if (!key) return null;
+
+  const line = REACT.agent[key];
+  if (!line) return null;
+
+  wake(true);
+  stopWalk();
+  clearSulk();
+
+  if (key === 'working') {
+    /* 任务开始：一直保持忙碌，直到收到结束事件（或超时兜底） */
+    agentBusy = true;
+    agentBusyUntil = Date.now() + AGENT_BUSY_MAX;
+    setEmotion(line.id, 0, line.text);
+    return key;
+  }
+
+  /* 只有真正结束的事件才解除忙碌。
+   * 'failed'（工具报错）和 'waiting'（等你授权）任务都还在跑 ——
+   * 一并清掉忙碌的话，桌宠会在任务半途跑去溜达。 */
+  if (key === 'done' || key === 'end' || key === 'start') agentBusy = false;
+
+  setEmotion(line.id, key === 'end' ? 0 : holdFor(line.text), line.text);
+  if (!agentBusy) behaveNext = Date.now() + rand(8000, 16000);
+  return key;
 }
 
 /* ---------------- 光标轮询：注视 + 拖拽 + 行为 ---------------- */
@@ -691,6 +769,7 @@ function startApi() {
         height: walk ? Math.round(walk.h) : 0,
         autoBehave: autoBehave,
         clicks: clickN,
+        agent: { busy: agentBusy, lastEvent: agentSeen },
         sulkMsLeft: Math.max(0, sulkUntil - Date.now()),
         ai: {
           ready: settings.isReady(),
@@ -713,6 +792,16 @@ function startApi() {
         tempBackAt = 0;
         send('emotion', body);
         res.end('{"ok":true}');
+      });
+      return;
+    }
+    /* 编码代理事件：Claude Code hook / Codex notify 直接把各自的 JSON 灌进来 */
+    if (req.method === 'POST' && req.url === '/agent') {
+      readBody(req, body => {
+        let o = null;
+        try { o = JSON.parse(body || '{}'); } catch (e) { /* 非 JSON 就当没事件 */ }
+        const acted = o ? agentEvent(o) : null;
+        res.end(JSON.stringify({ ok: !!acted, action: acted, seen: agentSeen }));
       });
       return;
     }
@@ -751,7 +840,7 @@ function startApi() {
       return;
     }
     res.statusCode = 404;
-    res.end('{"ok":false,"hint":"GET /emotions | GET /state | GET /activity | POST /emotion | POST /walk | POST /comment | POST /settings"}');
+    res.end('{"ok":false,"hint":"GET /emotions | GET /state | GET /activity | POST /emotion | POST /walk | POST /comment | POST /agent | POST /settings"}');
   });
 
   apiServer.on('error', e => console.error('[api] 启动失败：', e.message));

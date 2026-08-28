@@ -294,6 +294,73 @@ curl -X POST http://127.0.0.1:17817/settings # 打开设置窗口
 > 界面照常但接口不通,很容易误判成"功能坏了"。调试前先
 > `pkill -f emotion-ball-desktop`。
 
+## 接入 Claude Code / Codex
+
+任务开始、需要你授权、跑完了、出错了 —— 都让桌宠告诉你。用的正是上游那套
+「代理工作状态」表情(`32 处理中忙碌` / `35 等待输入` / `33 任务完成` / `34 出错`)。
+
+两边都把各自的事件 JSON 原样 POST 到 `/agent`,桌宠自己翻译:
+
+| 事件 | 表情 | 台词 |
+|---|---|---|
+| `SessionStart` | `01` 唤醒 | 开工了 |
+| `UserPromptSubmit` | `32` 处理中忙碌 | 接到活了,干起来 |
+| `Notification` / `PermissionRequest` | `35` 等待输入 | 卡住了,等你回话 |
+| `PostToolUseFailure` | `34` 出错 | 出岔子了 |
+| `Stop` / Codex `agent-turn-complete` | `33` 任务完成 | 干完了 |
+| `SessionEnd` | `00` 睡眠 | — |
+
+台词在 [reactions.js](reactions.js) 的 `agent` 段,随便改。
+
+**任务进行中会一直保持忙碌表情**:不散步、不自发换表情、DeepSeek 也不插嘴。
+中途插播的「出错」「等你回话」播完会**回到忙碌**而不是待机 —— 任务还在跑。
+结束事件没送达时有 30 分钟兜底,不会永远卡住。
+
+### Claude Code
+
+写进 `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "curl -s -m 2 -X POST http://127.0.0.1:17817/agent -H 'Content-Type: application/json' --data-binary @- >/dev/null 2>&1 || true",
+        "async": true,
+        "timeout": 5
+      }]
+    }]
+  }
+}
+```
+
+同样的条目复制给 `SessionStart` / `UserPromptSubmit` / `Notification` /
+`SessionEnd` / `PostToolUseFailure`。
+
+> 用 `command` + `async: true` + `|| true`,不用 `http` 类型的 hook ——
+> **桌宠没开的时候绝不能拖住你的会话**。这三样保证请求在后台跑、连不上也静默失败。
+> hook 的 stdin JSON 里带 `hook_event_name`,`--data-binary @-` 原样转发即可。
+
+### Codex
+
+`~/.codex/config.toml` 的 `notify` **只能配一个程序**,直接换掉会顶掉你已有的通知。
+用 [tools/codex-notify.sh](tools/codex-notify.sh) 分发:
+
+```toml
+notify = ["/绝对路径/tools/codex-notify.sh", "turn-ended"]
+```
+
+脚本先把参数原样转给原程序,再通知桌宠。原程序路径在脚本顶部的 `ORIGINAL`,
+不需要就留空。
+
+### 自测
+
+```bash
+curl -X POST http://127.0.0.1:17817/agent -d '{"hook_event_name":"UserPromptSubmit"}'
+curl http://127.0.0.1:17817/state   # 看 agent.busy 与 agent.lastEvent
+```
+
 ## AI 接口
 
 本地 HTTP,只绑 `127.0.0.1:17817`:

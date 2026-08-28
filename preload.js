@@ -14,11 +14,14 @@ contextBridge.exposeInMainWorld('pet', {
   onEmotion: cb => on('emotion', cb),
   onShape: cb => on('shape', cb),
   onSketch: cb => on('sketch', cb),
+  onWalk: cb => on('walk', cb),
+  onAct: cb => on('act', cb),
 
   /* 渲染进程 → 主进程 */
   ready: payload => ipcRenderer.send('ready', payload),
   hover: isOver => ipcRenderer.send('hover', isOver),
   dragStart: () => ipcRenderer.send('drag:start'),
   dragEnd: () => ipcRenderer.send('drag:end'),
+  poke: () => ipcRenderer.send('poke'),
   menu: () => ipcRenderer.send('menu')
 });

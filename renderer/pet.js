@@ -2,10 +2,14 @@
  * pet.js —— 渲染进程
  *
  * 职责：
- *   1. 实例化引擎，把表情清单上报给主进程（托盘 / 右键菜单据此生成）
+ *   1. 实例化引擎，注册「散步」自定义表情，把表情清单上报给主进程
  *   2. 圆形命中检测 → 告诉主进程何时关掉鼠标穿透
  *   3. 拖拽 / 点击 / 右键；位移小于阈值才算点击
  *   4. 接收主进程转发的 AI 消息，交给 handleAIMessage 自行容错
+ *
+ * 注意：创建时 idle:false —— 生命周期（活跃 / 发呆 / 睡眠）由主进程
+ * 的行为调度器独占。引擎自带的 _checkIdle 会把非 '02'/'00' 的表情
+ * 每帧强行拉回待机，两个调度器并存的话「好奇」「散步」活不过一帧。
  * ============================================================ */
 'use strict';
 
@@ -18,6 +22,30 @@
   var curEmotion = '02';
   var ball = null;
 
+  /* ---------------- 散步表情（自定义段 50+）----------------
+   * 身体左右摇摆的 period 必须是单跳时长的 2 倍：一跳偏左、下一跳偏右，
+   * 摇摆才跟落地节奏对得上。hopMs 由主进程在散步开始时下发，
+   * 这里按它重新注册，避免两边各写一个常数写歪。 */
+
+  function registerWalk(hopMs) {
+    EmotionBall.config.register({
+      id: '50', name: '散步', group: 'custom',
+      desc: '一弹一弹地挪动，身体随落地节奏轻轻摇摆',
+      en: { name: 'Strolling', desc: 'Hops along, body swaying with each landing' },
+      transition: 260,
+      pool: [2, 11, 17, 19],          /* 笑眼池 */
+      poolMs: [1800, 3200],
+      blinkMs: [2600, 5200],
+      body: { breathe: 0.016 },
+      anims: [
+        { target: 'body', prop: 'rotate', type: 'sine', amp: 5, period: (hopMs || 480) * 2 },
+        { target: 'eyes', prop: 'lookY', type: 'sine', amp: 1.8, period: hopMs || 480 }
+      ]
+    });
+  }
+
+  registerWalk(480);
+
   /* ---------------- 实例化 ---------------- */
 
   function build() {
@@ -26,7 +54,7 @@
     ball = EmotionBall.create(petEl, {
       emotion: curEmotion,
       shape: shape,
-      idle: true,           /* 60s 转待机、180s 转睡眠 */
+      idle: false,          /* 生命周期交给主进程，见文件头注释 */
       lite: false           /* 保留彩带与撒花 */
     });
     if (sketch) ball.setStyle({ sketch: 1 });
@@ -38,14 +66,14 @@
 
   build();
 
-  /* 表情清单上报（主进程用来建菜单） */
-  var groupNames = {};
-  EmotionBall.config.groups().forEach(function (g) { groupNames[g.key] = g.name; });
+  /* 表情清单上报（主进程用来建菜单）；散步是内部状态，不进菜单 */
   window.pet.ready({
     groups: EmotionBall.config.groups(),
-    emotions: EmotionBall.config.list().map(function (d) {
-      return { id: d.id, name: d.name, group: d.group, desc: d.desc };
-    })
+    emotions: EmotionBall.config.list()
+      .filter(function (d) { return d.id !== '50'; })
+      .map(function (d) {
+        return { id: d.id, name: d.name, group: d.group, desc: d.desc };
+      })
   });
 
   /* ---------------- 气泡 ---------------- */
@@ -95,7 +123,6 @@
     drag.x0 = e.screenX;
     drag.y0 = e.screenY;
     drag.moved = 0;
-    ball.resetIdle();
     window.pet.dragStart();
   });
 
@@ -119,7 +146,7 @@
   window.addEventListener('dblclick', function (e) {
     if (!isOverBall(e.clientX, e.clientY)) return;
     ball.burst(28);
-    ball.resetIdle();
+    window.pet.poke();
   });
 
   window.addEventListener('contextmenu', function (e) {
@@ -132,8 +159,19 @@
   window.pet.onGaze(function (g) { ball.setGaze(g.x, g.y); });
 
   window.pet.onEmotion(function (msg) {
-    ball.resetIdle();
     ball.handleAIMessage(msg);                  /* 对象或字符串都收，容错在引擎里 */
+  });
+
+  window.pet.onWalk(function (w) {
+    if (!w.active) return;                      /* 结束由主进程另发 emotion 收尾 */
+    registerWalk(w.hopMs);                      /* 摇摆节奏对齐本次跳跃时长 */
+    ball.setEmotion('50');
+  });
+
+  window.pet.onAct(function (act) {
+    if (act === 'spin') ball.spin(1);
+    else if (act === 'burst') ball.burst(24);
+    else if (act === 'bounce') ball.bounce();
   });
 
   window.pet.onShape(function (s) {
